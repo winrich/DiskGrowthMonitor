@@ -1,0 +1,118 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!--
+      单目标 net45（2026-09-23 由双目标 net45;net9.0 收敛而来）：
+        Windows 7 SP1 以上、Windows 10 / 11 与 Windows Server 2012 及以上，
+        全部自带 .NET Framework 4.5 或更高（4.x 系列为就地升级、向下兼容），
+        因此这一档能在全部目标机上做到零前置安装。
+      net9.0 目标已移除 —— 本工具只面向 Windows 部署，「开发期静态分析更全」这一项收益
+      不足以抵消「同一套逻辑要维护两份枚举实现 + 每个新 API 都要对两个 TFM 各构建一次」的成本。
+    -->
+    <TargetFramework>net45</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!--
+      必须显式指定 x64（不能依赖默认的 AnyCPU）：
+        目标机一律为 64 位系统；本工具要递归枚举数十万目录并对其排序，
+        32 位进程的 2GB 用户态地址空间不够用。固定 x64 后：
+          · 进程必然以 64 位运行；
+          · 只需分发 x64 的 SQLite.Interop.dll（见下方 _DeclareSqliteInteropX64），
+            省掉 x86 互操作库约 690 KB 的体积。
+        exe 会带 x64 机器头（PE machine=0x8664），不存在被 WoW64 以 32 位
+        加载的可能，因此「只给 x64 互操作库」是安全的。
+    -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+
+    <!--
+      允许 unsafe：为「枚举换芯」阶段预留 —— 该阶段要在
+      GetFileInformationByHandleEx(FileIdExtdDirectoryInfo / FileIdBothDirectoryInfo)
+      返回的裸缓冲区上按 NextEntryOffset 走指针逐项取值，避免为每个目录项做结构体封送
+      （全盘规模下封送是主要 CPU 成本之一，且可顺带免掉文件名的 260 字符强制转换）。
+      当前源码尚未使用 unsafe 块，开启此开关不产生任何代码或行为差异。
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <AssemblyName>DiskGrowthMonitor</AssemblyName>
+    <RootNamespace>DiskGrowthMonitor</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>磁盘空间增长监控</Product>
+    <Description>全盘递归磁盘占用扫描与两次快照对比工具</Description>
+
+    <!-- 只保留英文附属资源，减少输出目录噪声 -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!--
+    GC 模式改由 app.config 控制，不再使用 ServerGarbageCollection / ConcurrentGarbageCollection：
+    那两个 MSBuild 属性只写进 .NET Core 的 runtimeconfig.json，对 net45 完全不生效
+    （双目标时期它们只影响 net9.0 那一档，net45 侧一直是框架默认值）。
+    改用 app.config 的 <gcServer> / <gcConcurrent> 元素，见工程根目录 app.config。
+  -->
+
+  <PropertyGroup>
+    <!--
+      net45 的参考程序集不携带可空引用注解（例如 string.IsNullOrWhiteSpace 缺少
+      [NotNullWhen(false)]），会把「已经判空」的变量误报为 CS8602 假阳性，故豁免这一条。
+    -->
+    <NoWarn>$(NoWarn);CS8602</NoWarn>
+
+    <!--
+      关掉 System.Data.SQLite.Core 自带的互操作库复制。该包用自定义目标
+      CopySQLiteInteropFiles 挂在 BuildDependsOn 上，把 x86/x64 两个 SQLite.Interop.dll
+      都拷进 OutDir，但它有两个问题：
+        ① 不区分架构 —— x86 那一份对本项目是死重量；
+        ② 只设 CopyToOutputDirectory、不设 CopyToPublishDirectory，且完全绕开 publish 的
+           内容管道 ⇒ `dotnet publish` 产物里一个互操作库都没有，部署后启动即崩（且无任何警告）。
+      这里改为由下面 _DeclareSqliteInteropX64 自行声明。
+    -->
+    <CopySQLiteInteropFiles>false</CopySQLiteInteropFiles>
+    <ContentSQLiteInteropFiles>false</ContentSQLiteInteropFiles>
+    <CleanSQLiteInteropFiles>false</CleanSQLiteInteropFiles>
+  </PropertyGroup>
+
+  <!--
+    SQLite 互操作库声明。
+    必须写成 Target：SQLiteInteropFiles 这个项由包自带的 targets 在项目末尾导入时才定义，
+    项目正文（评估期）取不到它。
+    同时挂到 PrepareForBuild 与 ComputeFilesToPublish 之前 —— MSBuild 目标每次构建只执行一次，
+    所以不会重复添加。
+    只取 RecursiveDir 为 x64\ 的那一份，并同时设 CopyToOutputDirectory 与
+    CopyToPublishDirectory，保证 build 与 publish 两个目录内容一致。
+  -->
+  <Target Name="_DeclareSqliteInteropX64"
+          BeforeTargets="PrepareForBuild;ComputeFilesToPublish">
+    <ItemGroup>
+      <_SqliteInteropX64 Include="@(SQLiteInteropFiles)" Condition="'%(RecursiveDir)' == 'x64\'" />
+      <Content Include="@(_SqliteInteropX64)">
+        <Link>x64\SQLite.Interop.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <!--
+      SQLite 驱动（ADO.NET）用 System.Data.SQLite（SQLite 官方）而非 Microsoft.Data.Sqlite：
+      后者任何版本都够不上 net45 —— 9.0.0 只发 netstandard2.0（最低 net461），
+      1.x 是 net451 + netstandard1.3，2.x 是 netstandard2.0。
+      前者包内提供 lib/net45 与 build/net45 的互操作库，是 net45 上唯一现实的 ADO.NET 提供方。
+      互操作库 SQLite.Interop.dll 是原生 DLL（PE 无 CLI 头），导入表只有
+      KERNEL32(127) / ADVAPI32(9) / USER32(2) / WINTRUST(1) / mscoree(1)，
+      零 UCRT、零 VC 运行库依赖 ⇒ 目标机无需任何前置运行库。
+      注：它捆绑的 SQLite 引擎为 3.42.0。本项目未使用任何高于 3.24 的 SQL 特性
+      （只用 INSERT OR IGNORE / INSERT OR REPLACE / ON CONFLICT DO UPDATE /
+      临时表 / IFNULL / substr），且库文件格式与旧驱动写出的库完全互通，无需迁移数据。
+    -->
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
+    <!-- net45 的框架自带没有 ValueTuple（4.7 才进 BCL）。本项目用它作硬链接去重字典的键
+         （ConcurrentDictionary<(uint,ulong),bool>），并有 4 处元组解构。 -->
+    <PackageReference Include="System.ValueTuple" Version="4.5.0" />
+  </ItemGroup>
+
+</Project>

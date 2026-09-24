@@ -1,0 +1,19 @@
+# Text files are stored in the repository with LF line endings.
+* text=auto eol=lf
+
+# Windows scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files: never touch.
+*.exe binary
+*.dll binary
+*.pdb binary
+*.db binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.rar binary
+*.zip binary

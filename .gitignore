@@ -1,0 +1,63 @@
+# ============================================================
+#  DiskGrowthMonitor — ignore rules
+#  Only source code and documentation are tracked.
+#  Everything generated, downloaded or machine-specific stays out.
+# ============================================================
+
+# ---- Build output -------------------------------------------------
+bin/
+obj/
+publish/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.pdb
+*.cache
+*.tlog
+*.lastbuildstate
+*.FileListAbsolute.txt
+
+# ---- IDE / editor -------------------------------------------------
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+*.VC.db
+
+# ---- Scan databases (never commit scan results) -------------------
+#  disk_growth.db is machine-specific and can be hundreds of MB.
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# ---- Logs and crash dumps ----------------------------------------
+*.log
+crash.log
+*.dmp
+
+# ---- Release archives and dev scratch -----------------------------
+#  Packaged builds and the research/benchmark workspace.
+*.rar
+*.7z
+*.zip
+_optdb/
+_opt/
+_opt2/
+
+# ---- Generated sample reports ------------------------------------
+#  Reports embed real directory paths from the machine that produced
+#  them, so they are not shipped. Run the tool to generate your own.
+samples/
+
+# ---- OS noise -----------------------------------------------------
+Thumbs.db
+desktop.ini
