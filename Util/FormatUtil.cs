@@ -103,6 +103,18 @@ public static class FormatUtil
         return width >= targetWidth ? text + " " : text + new string(' ', targetWidth - width);
     }
 
+    /// <summary>
+    /// 按目标**显示宽度**左侧补空格（数字右对齐）。宽度已够则只追加一个空格作最小间隔，
+    /// 绝不截断内容。与 <see cref="Cell"/> 的区别仅在「补空格在左还是右」：
+    /// 文本列（标签/名称/路径）用 Cell 左对齐，数值列用 CellRight 右对齐，
+    /// 让同一列里的 "294.84 GB" 与 "850 MB" 小数点/数字右缘对齐。
+    /// </summary>
+    public static string CellRight(string text, int targetWidth)
+    {
+        int width = DisplayWidth(text);
+        return width >= targetWidth ? text + " " : new string(' ', targetWidth - width) + text;
+    }
+
     /// <summary>字符串在等宽终端里占的列数（宽字符按 2 列计）。</summary>
     public static int DisplayWidth(string s)
     {

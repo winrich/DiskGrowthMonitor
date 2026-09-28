@@ -212,8 +212,11 @@ internal static class Program
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string dbPath = Path.Combine(baseDir, "disk_growth.db");
 
-        Console.WriteLine(Lang.T("=== DiskGrowthMonitor 磁盘空间增长监控 ===",
-                                  "=== DiskGrowthMonitor - disk space growth monitor ==="));
+        // 颜色先于首行输出启用：交互模式下才开启（日志中继/重定向会禁用，避免 ANSI 码污染），
+        // 终端不支持 VT（WS2012 等）时 ConsoleStyle 内部自动降级为纯文本。
+        ConsoleStyle.Enable(consoleLog == null);
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("DiskGrowthMonitor · 磁盘空间增长监控",
+                                                        "DiskGrowthMonitor - disk space growth monitor")));
         Console.WriteLine();
 
         if (opt.ShowEnv)
@@ -293,7 +296,7 @@ internal static class Program
             return 2;
         }
 
-        Console.WriteLine(Lang.F("[环境] 扫描根：{0}", "[Env] Scan roots: {0}",
+        Console.WriteLine(Lang.F("  扫描范围   {0}", "  Scan roots   {0}",
             string.Join(Lang.T("、", ", "), roots.Select(r => r.DisplayName))));
 
         // 环境探测：把「这台机器上应该怎么扫」从编译期常量变成运行期判断。
@@ -303,10 +306,10 @@ internal static class Program
         var sysProfile = EnvironmentProbe.Probe(roots.Select(r => r.Path), Lang.Info);
         var sysStrategy = EnvironmentProbe.Decide(sysProfile, opt.EnumEngine);
         Dev(Lang.T("[环境] ", "[Env] ") + EnvironmentProbe.FormatBrief(sysProfile, sysStrategy));
-        // 语言行把「结论 + 原始探测值」一并打出：语言判错的唯一表现就是「整篇都是英文」，
+        // 语言行把「结论 + 原始探测值」一并打出（下放 --dev）：语言判错的唯一表现就是「整篇都是英文」，
         // 不给出原始值就只能靠猜（尤其猜不到「界面中文 + 代码页 65001 → 判英文」这种组合）。
         var langInfo = sysProfile.Language;
-        Console.WriteLine(Lang.F(
+        Dev(Lang.F(
             "[环境] 语言：{0}（界面 {1} · 控制台代码页 输出 {2} / 输入 {4}{3}）",
             "[Env] Language: {0} (UI {1} - console code page out {2} / in {4}{3})",
             Lang.DescribeLanguage(langInfo?.Language ?? Lang.Current),
@@ -314,18 +317,22 @@ internal static class Program
             langInfo?.ConsoleOutputCodePage ?? 0,
             (langInfo?.IsForced ?? false) ? Lang.T(" · 由 --lang 指定", " - forced by --lang") : string.Empty,
             langInfo?.ConsoleInputCodePage ?? 0));
-        // 默认排除行必须点明「知识库豁免」的存在：默认排除里的系统目录一旦命中知识库就会被放行，
-        // 只说「启用」会与实际行为对不上（2026-09-24 用户反馈第 3 条）。
-        Console.WriteLine(Lang.F(
-            "[环境] 默认排除：{0}　硬链接去重：{1}　跟随符号链接：{2}",
-            "[Env] Default exclusions: {0}  Hardlink dedup: {1}  Follow reparse points: {2}",
-            opt.NoDefaultExclude
-                ? Lang.T("禁用", "disabled")
-                : opt.NoKnowledgeRescan
-                    ? Lang.T("启用", "enabled")
-                    : Lang.T("启用（命中知识库的目录仍会扫描）", "enabled (directories matching the knowledge base are still scanned)"),
-            opt.NoDedup ? Lang.T("禁用", "disabled") : Lang.T("启用", "enabled"),
-            opt.FollowReparse ? Lang.T("是", "yes") : Lang.T("否", "no")));
+
+        // 运行方式一行：管理员 + 三个开关。默认排除必须点明「知识库豁免」的存在——
+        // 默认排除里的系统目录一旦命中知识库就会被放行，只说「默认排除」会与实际行为对不上
+        // （2026-09-24 用户反馈第 3 条）。
+        string modeAdmin = ElevationHelper.IsElevated()
+            ? Lang.T("管理员（增量可用）", "admin (incremental available)")
+            : Lang.T("普通用户（全量扫描）", "standard user (full scan)");
+        string modeExcl = opt.NoDefaultExclude
+            ? Lang.T("无默认排除", "no default exclusion")
+            : opt.NoKnowledgeRescan
+                ? Lang.T("默认排除", "default exclusions")
+                : Lang.T("默认排除（知识库命中仍扫描）", "default exclusions (knowledge-base hits still scanned)");
+        string modeDedup = opt.NoDedup ? Lang.T("不去重", "no dedup") : Lang.T("硬链去重", "hardlink dedup");
+        string modeReparse = opt.FollowReparse ? Lang.T("跟随符号链接", "follow reparse points") : Lang.T("不跟随符号链接", "no reparse follow");
+        Console.WriteLine(Lang.F("  运行方式   {0} · {1} · {2} · {3}",
+            "  Mode   {0} - {1} - {2} - {3}", modeAdmin, modeExcl, modeDedup, modeReparse));
         Dev(Lang.F("[环境] 枚举引擎：{0}", "[Env] Enum engine: {0}", sysStrategy.EnumEngine));
         Console.WriteLine();
 
@@ -334,7 +341,7 @@ internal static class Program
         DateTime? prevScanTime = prevRun?.ScanTime;
         long previousRunId = prevRun?.Id ?? 0;
 
-        Console.WriteLine(Lang.T("[1/5] 建立上一轮快照基准…", "[1/5] Establishing the previous-run snapshot baseline..."));
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 1/5  建立对比基准", "▸ 1/5  Establish comparison baseline")));
         var baselines = db.BeginPrevSnapshot(roots);
         long prevRows = baselines.Sum(b => b.CopiedRows);
         bool isFirstRun = prevRows == 0;
@@ -347,20 +354,19 @@ internal static class Program
             if (b.CopiedRows > 0)
             {
                 string when = b.BaselineRunId.HasValue
-                    ? Lang.F("第 {0} 轮，{1}", "run #{0}, {1}",
+                    ? Lang.F("第 {0} 轮 · {1}", "run #{0} - {1}",
                              b.BaselineRunId.Value, FormatUtil.Timestamp(b.BaselineTime ?? DateTime.MinValue))
                     : Lang.T("时间未知（旧版本数据库）", "unknown (database from an older version)");
                 Console.WriteLine(Lang.F(
-                    "      {0}：已固化 {1} 条基准（该根上次扫描：{2}）。",
-                    "      {0}: pinned {1} directory records as the baseline (this root was last scanned at {2}).",
+                    "   {0}   已固化 {1} 条基准（上次 {2}）",
+                    "   {0}   pinned {1} directory records as baseline (last {2})",
                     root.DisplayName, FormatUtil.Count(b.CopiedRows), when));
             }
             else
             {
                 Console.WriteLine(Lang.F(
-                    "      {0}：无历史快照，该根本次为首次运行（结果将作为该根后续对比的基准）。",
-                    "      {0}: no previous snapshot; this is the first run for this root "
-                    + "(the result becomes its baseline for later comparisons).",
+                    "   {0}   首次运行（本次结果将作为基准）",
+                    "   {0}   first run (the result becomes its baseline)",
                     root.DisplayName));
             }
         }
@@ -492,7 +498,7 @@ internal static class Program
         Console.WriteLine();
 
         // ---------- 阶段二：扫描并写入临时表 ----------
-        Console.WriteLine(Lang.T("[2/5] 开始扫描…", "[2/5] Scanning..."));
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 2/5  扫描", "▸ 2/5  Scan")));
         db.CreateStageTable();
 
         var skip = new SkipListService(settings.UseDefaultExclude, settings.FollowReparse, opt.Excludes,
@@ -547,23 +553,26 @@ internal static class Program
             return 121;
         }
 
-        Console.WriteLine(Lang.F("      扫描完成：{0} 个目录、{1} 个文件、{2}，耗时 {3}。",
-                                 "      Scan complete: {0} directories, {1} files, {2}, elapsed {3}.",
-                                 FormatUtil.Count(stats.TotalDirs), FormatUtil.Count(stats.TotalFiles),
-                                 FormatUtil.Bytes(stats.TotalBytes), FormatUtil.Duration(stats.ElapsedMs)));
+        Console.WriteLine(ConsoleStyle.Key(Lang.F("  ✓ 扫描完成   {0} 目录 · {1} 文件 · {2} · {3}",
+                                                   "  ✓ Scan complete   {0} dirs - {1} files - {2} - {3}",
+                                                   FormatUtil.Count(stats.TotalDirs), FormatUtil.Count(stats.TotalFiles),
+                                                   FormatUtil.Bytes(stats.TotalBytes), FormatUtil.Duration(stats.ElapsedMs))));
+        // 并行 / 增量复用 / 硬链去重 合并为一行（各自条件成立才出现，用 · 连接）
+        var meta = new List<string>();
         if (stats.UsedThreads > 1)
-            Console.WriteLine(Lang.F("      并行扫描：{0} 个扫描根同时进行。",
-                                     "      Parallel scanning: {0} scan roots in flight.", stats.UsedThreads));
+            meta.Add(Lang.F("并行 {0} 根", "parallel {0} roots", stats.UsedThreads));
         if (stats.ReusedDirs > 0)
-            Console.WriteLine(Lang.F("      增量复用：{0} 个目录直接沿用上一轮快照，未重新扫描。",
-                                     "      Incremental reuse: {0} directories reused from the previous snapshot "
-                                     + "without rescanning.", FormatUtil.Count(stats.ReusedDirs)));
+            meta.Add(Lang.F("增量复用 {0} 目录", "incremental reuse {0} dirs", FormatUtil.Count(stats.ReusedDirs)));
+        if (stats.DedupedFileCount > 0)
+            meta.Add(Lang.F("硬链去重 {0} 文件（{1}）", "hardlink dedup {0} files ({1})",
+                            FormatUtil.Count(stats.DedupedFileCount), FormatUtil.Bytes(stats.DedupedBytes)));
+        if (meta.Count > 0)
+            Console.WriteLine("     " + string.Join(Lang.T(" · ", " - "), meta));
         // 默认排除与自定义排除分开报：合并成「排除 N」时，一旦默认排除目录命中知识库被豁免放行，
         // 就会出现「环境行写着默认排除启用、这里却是 排除 0」的自相矛盾数字（2026-09-24 用户反馈第 3 条）
         Console.WriteLine(Lang.F(
-            "      跳过项：默认排除 {0} · 自定义排除 {1} · 权限不足 {2} · 符号链接 {3} · IO 异常 {4}。",
-            "      Skipped: default exclusions {0} - custom exclusions {1} - access denied {2} - "
-            + "reparse points {3} - IO errors {4}.",
+            "     跳过 默认排除 {0} · 自定义 {1} · 权限不足 {2} · 符号链接 {3} · IO {4}",
+            "     Skipped  default {0} - custom {1} - access denied {2} - reparse {3} - IO {4}",
             stats.DefaultExcludedCount, stats.ExcludedCount - stats.DefaultExcludedCount,
             stats.AccessDeniedCount, stats.ReparseCount, stats.ErrorCount));
         if (stats.KnowledgeRescuedCount > 0)
@@ -571,10 +580,6 @@ internal static class Program
                        "      Knowledge-base rescue: {0} directories matched exclusion/skip rules but were retried "
                        + "because they match the directory-purpose knowledge base.",
                        FormatUtil.Count(stats.KnowledgeRescuedCount)));
-        if (stats.DedupedFileCount > 0)
-            Console.WriteLine(Lang.F("      硬链接去重：避免重复计入 {0} 个文件（{1}）。",
-                                     "      Hardlink dedup: {0} files ({1}) counted once.",
-                                     FormatUtil.Count(stats.DedupedFileCount), FormatUtil.Bytes(stats.DedupedBytes)));
         if (stats.EnumEngineSummary.Length > 0)
             Dev(Lang.F("      枚举引擎：{0}", "      Enum engine: {0}", stats.EnumEngineSummary));
         foreach (var note in stats.EnumEngineNotes)
@@ -592,8 +597,8 @@ internal static class Program
         Console.WriteLine();
 
         // ---------- 阶段三：单事务提交换入新快照 ----------
-        Console.WriteLine(Lang.T("[3/5] 写入数据库（两阶段提交，失败可回退至上一轮）…",
-                                 "[3/5] Committing to the database (two-phase commit; rolls back to the previous run on failure)..."));
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 3/5  写入数据库（两阶段提交）",
+                                                         "▸ 3/5  Commit to database (two-phase)")));
         var run = new ScanRun
         {
             ScanTime = startedAt,
@@ -605,15 +610,14 @@ internal static class Program
             IsFirstRun = isFirstRun
         };
         db.CommitStaging(roots, run);
-        Console.WriteLine(Lang.F("      已提交，批次 #{0}。", "      Committed, run #{0}.", run.Id));
+        Console.WriteLine(ConsoleStyle.Success(Lang.F("  ✓ 已提交 · 批次 #{0}", "  ✓ Committed - run #{0}", run.Id)));
         // 只在扫描根集合与本轮不同时提示：其余根各自最近一轮的快照被保留，
         // 之后这些根再次被扫到时即可直接与自己的上次结果对比（不再判「首次运行」）。
         if (db.LastRetainedRows > 0)
-            Console.WriteLine(Lang.F(
-                "      已保留其他扫描根的历史快照 {0} 行（各自对应其最近一次扫描，扩回扫描范围时继续作为基准）。",
-                "      Kept {0} snapshot rows of other scan roots (each from its own latest scan; they remain "
-                + "the baseline when those roots are scanned again).",
-                FormatUtil.Count(db.LastRetainedRows)));
+            Console.WriteLine(ConsoleStyle.Muted(Lang.F(
+                "  已保留其他扫描根的历史快照 {0} 行（各自对应其最近一次扫描，扩回扫描范围时继续作为基准）",
+                "  Kept {0} snapshot rows of other scan roots (each from its own latest scan; they remain the baseline)",
+                FormatUtil.Count(db.LastRetainedRows))));
 
         // ---------- 保存 USN 状态（供下次增量） ----------
         // 增量路径：保存 Collect 返回的新位置；全扫路径：查询当前位置保存。
@@ -647,7 +651,7 @@ internal static class Program
         Console.WriteLine();
 
         // ---------- 阶段四：对比分析 ----------
-        Console.WriteLine(Lang.T("[4/5] 与上一轮快照对比…", "[4/5] Comparing with the previous snapshot..."));
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 4/5  对比上一轮快照", "▸ 4/5  Compare with previous snapshot")));
         var analyzer = new GrowthAnalyzer(db);
         var analysis = analyzer.Analyze(
             roots,
@@ -659,7 +663,6 @@ internal static class Program
             isFirstRun,
             prevScanTime,
             baselines);
-        Console.WriteLine(Lang.T("      对比完成。", "      Comparison complete."));
 
         // 为进入报告候选集的目录（榜单 / 新增消失 / 明细）标注已知用途。
         // 只作用于少量候选行，不触碰扫描、快照与对比链路。
@@ -678,13 +681,13 @@ internal static class Program
 
         if (opt.NoReport)
         {
-            Console.WriteLine(Lang.T("[5/5] 已跳过报告生成（--no-report）。",
-                                     "[5/5] Report generation skipped (--no-report)."));
+            Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 5/5  已跳过报告生成（--no-report）",
+                                                           "▸ 5/5  Report generation skipped (--no-report)")));
             return 0;
         }
 
         // ---------- 阶段五：生成 HTML 报告 ----------
-        Console.WriteLine(Lang.T("[5/5] 生成 HTML 报告…", "[5/5] Generating the HTML report..."));
+        Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 5/5  生成 HTML 报告", "▸ 5/5  Generate HTML report")));
         string reportPath = opt.OutputPath is { Length: > 0 }
             ? Path.GetFullPath(opt.OutputPath)
             : Path.Combine(baseDir, "reports",
@@ -734,9 +737,8 @@ internal static class Program
 
         string html = ReportBuilder.Build(model);
         File.WriteAllText(reportPath, html, new UTF8Encoding(false));
-        Console.WriteLine(Lang.F("      报告已生成：{0}", "      Report written: {0}", reportPath));
-        Console.WriteLine(Lang.F("      文件大小：{0}", "      File size: {0}",
-                                 FormatUtil.Bytes(new FileInfo(reportPath).Length)));
+        Console.WriteLine(ConsoleStyle.Success(Lang.F("  ✓ 已生成  {0}  ({1})", "  ✓ Written  {0}  ({1})",
+                                                       reportPath, FormatUtil.Bytes(new FileInfo(reportPath).Length))));
 
         if (opt.OpenAfterReport)
         {
@@ -865,12 +867,12 @@ internal static class Program
             // 具体错误码属排障信息，收进 --dev —— 过去把原因写死成「需要管理员权限」，
             // 于是管理员档也在报权限不足，把诊断变成了误导（2026-09-24 用户反馈）。
             notices.Add(roots.Any(r => r.IsDrive)
-                ? Lang.T("      进度百分比：有整卷根无法精确估算目录总数，改用「已扫字节 / 卷已用空间」近似（带 ~ 前缀）；子目录根只显示已扫量。",
-                         "      Progress percentage: a whole-volume root could not be estimated precisely, so it falls "
+                ? Lang.T("  进度百分比：有整卷根无法精确估算目录总数，改用「已扫字节 / 卷已用空间」近似（带 ~ 前缀）；子目录根只显示已扫量。",
+                         "  Progress percentage: a whole-volume root could not be estimated precisely, so it falls "
                          + "back to \"scanned bytes / volume used space\" (shown with a ~ prefix); subdirectory roots "
                          + "show the scanned volume only.")
-                : Lang.T("      进度百分比：本次无法精确估算目录总数，只显示已扫量。",
-                         "      Progress percentage: the directory total could not be estimated this run; only the "
+                : Lang.T("  进度百分比：本次无法精确估算目录总数，只显示已扫量。",
+                         "  Progress percentage: the directory total could not be estimated this run; only the "
                          + "scanned volume is shown."));
             if (DevMode)
                 notices.Add(Lang.F("      估算失败原因：{0}。", "      Estimation failure reasons: {0}.",
@@ -1030,16 +1032,35 @@ internal static class Program
 
     private static void PrintConsoleSummary(AnalysisResult a, bool isFirstRun, long minBytes)
     {
-        Console.WriteLine(Lang.T("--- 各扫描根对比 ---", "--- Per-root comparison ---"));
+        Console.WriteLine(ConsoleStyle.Muted(Lang.T("   各扫描根", "   Per-root comparison")));
+        Console.WriteLine(ConsoleStyle.Muted("     "
+            + FormatUtil.Cell(Lang.T("盘", "Drive"), 6)
+            + FormatUtil.CellRight(Lang.T("本次占用", "current"), 11)
+            + FormatUtil.CellRight(Lang.T("变化量", "delta"), 12)
+            + FormatUtil.CellRight(Lang.T("变化率", "change"), 10)));
         foreach (var r in a.Roots)
         {
-            string change = isFirstRun
-                ? Lang.F("{0}（首次记录）", "{0} (first record)", FormatUtil.Bytes(r.CurrBytes ?? 0))
-                : FormatUtil.SignedBytes(r.GrowthBytes)
-                  + Lang.T("（", " (") + FormatUtil.SignedPercent(r.GrowthPercent) + Lang.T("）", ")");
-            Console.WriteLine("  " + FormatUtil.Cell(r.DisplayName, 14)
-                              + FormatUtil.Cell(Lang.T("本次", "current"), 8)
-                              + FormatUtil.Cell(FormatUtil.Bytes(r.CurrBytes ?? 0), 12) + change);
+            string delta, rate;
+            if (isFirstRun)
+            {
+                delta = Lang.T("—", "-");
+                rate = Lang.T("首次", "first");
+            }
+            else if (double.IsNaN(r.GrowthPercent) || double.IsInfinity(r.GrowthPercent))
+            {
+                delta = FormatUtil.SignedBytes(r.GrowthBytes);
+                rate = Lang.T("新增", "new");
+            }
+            else
+            {
+                delta = FormatUtil.SignedBytes(r.GrowthBytes);
+                rate = FormatUtil.SignedPercent(r.GrowthPercent);
+            }
+            Console.WriteLine("     "
+                + FormatUtil.Cell(r.DisplayName, 6)
+                + FormatUtil.CellRight(FormatUtil.Bytes(r.CurrBytes ?? 0), 11)
+                + FormatUtil.CellRight(delta, 12)
+                + FormatUtil.CellRight(rate, 10));
         }
         Console.WriteLine();
 
@@ -1051,8 +1072,8 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine(Lang.F("--- 增长最快的目录（前 {0} 项，共 {1} 项入选）---",
-                                 "--- Fastest-growing directories (top {0} of {1} that qualified) ---",
+        Console.WriteLine(Lang.F("   增长最快的目录（前 {0} / 共 {1}）",
+                                 "   Fastest-growing directories (top {0} / {1})",
                                  Math.Min(10, a.GrowthTop.Count), FormatUtil.Count(a.GrowthTop.Count)));
         if (a.GrowthTop.Count == 0)
         {
@@ -1062,19 +1083,25 @@ internal static class Program
         else
         {
             if (a.GrowthFallbackUsed)
-                Console.WriteLine(Lang.F("  （注：无目录达到 {0} 阈值，以下按未应用阈值的变化量降序，报告中有明确标注）",
-                                         "  (Note: no directory reached the {0} threshold; the list below is sorted by "
-                                         + "unfiltered delta, as flagged in the report)",
-                                         FormatUtil.MbThreshold(minBytes)));
-            Console.WriteLine("  " + FormatUtil.Cell(Lang.T("变化量", "Delta"), 12)
-                              + FormatUtil.Cell(Lang.T("变化率", "Change"), 11)
-                              + FormatUtil.Cell(Lang.T("本次占用", "Current"), 12)
-                              + Lang.T("路径", "Path"));
+                Console.WriteLine(ConsoleStyle.Muted(Lang.F(
+                    "  ※ 无目录达到 {0} 阈值，以下按未应用阈值的变化量降序（报告中有标注）",
+                    "  * No directory reached the {0} threshold; sorted by unfiltered delta (flagged in the report)",
+                    FormatUtil.MbThreshold(minBytes))));
+            Console.WriteLine(ConsoleStyle.Muted("     "
+                + FormatUtil.CellRight(Lang.T("变化量", "Delta"), 12)
+                + FormatUtil.CellRight(Lang.T("变化率", "Change"), 10)
+                + FormatUtil.CellRight(Lang.T("本次占用", "Current"), 11)
+                + "  " + Lang.T("路径", "Path")));
             foreach (var it in a.GrowthTop.Take(10))
             {
-                Console.WriteLine($"  {FormatUtil.SignedBytes(it.GrowthBytes),12}  " +
-                                  $"{FormatUtil.SignedPercent(it.GrowthPercent),11}  " +
-                                  $"{FormatUtil.Bytes(it.CurrBytes ?? 0),12}  {it.Path}");
+                string rate = (double.IsNaN(it.GrowthPercent) || double.IsInfinity(it.GrowthPercent))
+                    ? Lang.T("新增", "new")
+                    : FormatUtil.SignedPercent(it.GrowthPercent);
+                Console.WriteLine("     "
+                    + FormatUtil.CellRight(FormatUtil.SignedBytes(it.GrowthBytes), 12)
+                    + FormatUtil.CellRight(rate, 10)
+                    + FormatUtil.CellRight(FormatUtil.Bytes(it.CurrBytes ?? 0), 11)
+                    + "  " + it.Path);
             }
         }
         Console.WriteLine();
@@ -1094,24 +1121,35 @@ internal static class Program
     /// </summary>
     private static void PrintVolumeGap(IReadOnlyList<VolumeGap> gaps, ScanStatistics stats)
     {
-        bool printedGap = false;
+        var shown = new List<VolumeGap>();
         foreach (var g in gaps)
+            if (Math.Abs(g.GapPercent) >= 1.0) shown.Add(g);
+
+        if (shown.Count > 0)
         {
-            if (Math.Abs(g.GapPercent) < 1.0) continue;
-            printedGap = true;
-            Console.WriteLine(Lang.F("      容量口径：{0} 卷已用 {1} · 本次统计 {2} · 差 {3}（{4}）",
-                                     "      Capacity check: {0} used {1} - counted {2} - difference {3} ({4})",
-                                     g.DriveLabel, FormatUtil.Bytes(g.UsedBytes),
-                                     FormatUtil.Bytes(g.ScannedBytes),
-                                     FormatUtil.SignedBytes(g.GapBytes), FormatUtil.Percent(g.GapPercent)));
+            Console.WriteLine(ConsoleStyle.Muted(Lang.T("   容量口径", "   Capacity check")));
+            Console.WriteLine(ConsoleStyle.Muted("     "
+                + FormatUtil.Cell(Lang.T("盘", "Drive"), 4)
+                + FormatUtil.CellRight(Lang.T("卷已用", "used"), 11)
+                + FormatUtil.CellRight(Lang.T("本次统计", "counted"), 11)
+                + FormatUtil.CellRight(Lang.T("差额", "gap"), 11)
+                + FormatUtil.CellRight(Lang.T("差额率", "rate"), 9)));
+            foreach (var g in shown)
+            {
+                Console.WriteLine("     "
+                    + FormatUtil.Cell(g.DriveLabel, 4)
+                    + FormatUtil.CellRight(FormatUtil.Bytes(g.UsedBytes), 11)
+                    + FormatUtil.CellRight(FormatUtil.Bytes(g.ScannedBytes), 11)
+                    + FormatUtil.CellRight(FormatUtil.SignedBytes(g.GapBytes), 11)
+                    + FormatUtil.CellRight("(" + FormatUtil.Percent(g.GapPercent) + ")", 9));
+            }
+            Console.WriteLine(ConsoleStyle.Muted(Lang.T(
+                "   ※ 程序统计的是「去重后文件逻辑大小之和」，卷已用是「已分配簇数」；",
+                "   *  Directory totals sum deduplicated logical file sizes; volume used is allocated clusters;")));
+            Console.WriteLine(ConsoleStyle.Muted(Lang.T(
+                "     差额来自 NTFS 元数据 / MFT 保留区 / 被排除目录，不代表有目录被漏扫。",
+                "     the gap comes from NTFS metadata / the MFT reserved zone / excluded directories, not a missed directory.")));
         }
-        if (printedGap)
-            Console.WriteLine(Lang.T(
-                "        目录统计为「去重后文件逻辑大小之和」，与卷已用（已分配簇数）天然有差："
-                + "NTFS 元数据与 MFT 保留区不属任何目录、被排除目录也不计入 —— 差额不代表有目录被漏扫。",
-                "        Directory totals sum deduplicated logical file sizes and inherently differ from volume used "
-                + "space (allocated clusters): NTFS metadata and the MFT reserved zone belong to no directory, and "
-                + "excluded directories are not counted -- the difference does not mean any directory was missed."));
 
         if (stats.AccessDeniedCount <= 0) return;
 
@@ -1121,23 +1159,19 @@ internal static class Program
         // 未提权档必须点明 --reset-skips：实测（2026-09-24）这些目录下次会被跳过清单**直接略过**
         // 而不重试 —— 提权后不加 --reset-skips，权限不足数会原样停在 99，用户会以为「提权没用」。
         if (ElevationHelper.IsElevated())
-            Console.WriteLine(Lang.F(
-                "      ! 权限不足：{0} 个目录未统计（管理员亦不可读的系统保护区），"
-                + "其占用未计入本次统计；提权与 --reset-skips 都不会让它们放行。",
-                "      ! Access denied: {0} directories were not counted (system-reserved areas that even "
-                + "administrators cannot read); their usage is excluded, and neither elevation nor --reset-skips "
-                + "will let them through.", stats.AccessDeniedCount));
+            Console.WriteLine(ConsoleStyle.Warning(Lang.F(
+                "  ! 权限不足 {0} 个目录未统计（系统保护区，提权与 --reset-skips 均不放行）",
+                "  ! Access denied: {0} directories not counted (system-reserved; elevation and --reset-skips won't help)",
+                stats.AccessDeniedCount)));
         else
         {
-            Console.WriteLine(Lang.F(
-                "      ! 本次未以管理员身份运行：{0} 个目录因权限不足未统计，磁盘占用会明显偏小。",
-                "      ! Not running as administrator: {0} directories were not counted due to access denial, "
-                + "so the total is noticeably low.", stats.AccessDeniedCount));
-            Console.WriteLine(Lang.T(
-                "        以管理员身份运行可消除大部分 —— 但它们已写入跳过清单、下次会直接略过，"
-                + "提权重跑时请加 --reset-skips 强制重试一次。",
-                "        Running as administrator removes most of them -- but they are already in the skip list and "
-                + "will be skipped next time; add --reset-skips when re-running elevated to force one retry."));
+            Console.WriteLine(ConsoleStyle.Warning(Lang.F(
+                "  ! 本次未以管理员身份运行：{0} 个目录因权限不足未统计，占用会明显偏小。",
+                "  ! Not running as administrator: {0} directories not counted due to access denial; the total is low.",
+                stats.AccessDeniedCount)));
+            Console.WriteLine(ConsoleStyle.Warning(Lang.T(
+                "    以管理员身份运行可消除大部分；提权重跑时请加 --reset-skips 强制重试一次。",
+                "    Running as administrator removes most of them; add --reset-skips when re-running elevated.")));
         }
     }
 
