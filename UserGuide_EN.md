@@ -236,8 +236,11 @@ A: On a first scan without elevation the program cannot count directories precis
 **Q: Why is the second run much faster?**
 A: Two reasons: metadata is now in the system cache (measured ~2.4× faster); and when running elevated, if nothing changed the program **reuses the entire previous snapshot** based on the change journal, finishing in seconds. Add `--full` to force a full scan if you suspect the numbers.
 
+**Q: If the scan scope changes (say `-d c,d`, then `-d c`, then back), do I lose the baselines?**
+A: No. Each scan root keeps **its own latest** snapshot as the baseline, so comparison resumes where that root left off even after a few rounds. The report labels this honestly as "compared with this root's own last scan (run #N)"; a newly added root is labeled "first record".
+
 **Q: Does the database keep growing?**
-A: No. Only the current and previous snapshots are kept, so the size is stable (roughly 15–25 MB per 100k directories).
+A: No. Snapshots rotate per scan root and only the latest round per root is kept, so the size is stable (roughly 15–25 MB per 100k directories).
 
 **Q: The disk feels sluggish while it runs.**
 A: The program reads sequentially on a single thread, but mechanical drives still feel it. Antivirus real-time scanning also slows things down considerably — excluding the program folder helps.
@@ -261,4 +264,4 @@ A: Yes — `--lang=zh` or `--lang=en`. The default `auto` decides from the syste
 
 ---
 
-*For implementation details, database schema and project layout see [`README_EN.md`](README_EN.md) (Chinese: [`README.md`](README.md) / [`使用说明.md`](使用说明.md)).*
+*For implementation details, database schema and project layout see [`README.md`](README.md) (Chinese: [`README_zh.md`](README_zh.md) / [`使用说明.md`](使用说明.md)).*

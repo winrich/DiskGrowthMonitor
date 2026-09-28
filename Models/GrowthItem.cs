@@ -81,5 +81,10 @@ public sealed class RootComparison
     public long PrevFiles { get; init; }
     public long CurrFiles { get; init; }
     public long CurrDirs { get; init; }
+    /// <summary>该根是否首次记录（库中没有它自己的基准；与整体是否首次运行无关）。</summary>
     public bool IsFirstRun { get; init; }
+    /// <summary>该根基准行所属的扫描批次（null = 未知，旧版本库回填失败）。</summary>
+    public long? BaselineRunId { get; init; }
+    /// <summary>该根基准行的扫描时间（与 BaselineRunId 同源）。</summary>
+    public DateTime? BaselineTime { get; init; }
 }

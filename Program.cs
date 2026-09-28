@@ -335,21 +335,44 @@ internal static class Program
         long previousRunId = prevRun?.Id ?? 0;
 
         Console.WriteLine(Lang.T("[1/5] 建立上一轮快照基准…", "[1/5] Establishing the previous-run snapshot baseline..."));
-        long prevRows = db.BeginPrevSnapshot(roots);
+        var baselines = db.BeginPrevSnapshot(roots);
+        long prevRows = baselines.Sum(b => b.CopiedRows);
         bool isFirstRun = prevRows == 0;
-        Console.WriteLine(isFirstRun
-            ? Lang.T("      数据库中无该扫描根的历史快照，本次为首次运行（结果将作为后续对比基准）。",
-                     "      No previous snapshot exists for this scan root; this is the first run "
-                     + "(the result becomes the baseline for later comparisons).")
-            : Lang.F("      已固化 {0} 条目录记录作为对比基准（上次扫描：{1}）。",
-                     "      Pinned {0} directory records as the comparison baseline (last scan: {1}).",
-                     FormatUtil.Count(prevRows), FormatUtil.Timestamp(prevRun!.ScanTime)));
+        // 按根交代基准来源：dir_snapshots 按「根」轮换，每个根的基准都是它自己最近一次扫描
+        // 的快照 —— 多盘轮换（-d c,d → -d c → -d c,d）时，扩回的根基准可能来自更早的批次，
+        // 这里与报告一样如实标注，绝不把它说成「上一轮」。
+        foreach (var b in baselines)
+        {
+            var root = roots.First(r => r.Key.Equals(b.RootKey, StringComparison.OrdinalIgnoreCase));
+            if (b.CopiedRows > 0)
+            {
+                string when = b.BaselineRunId.HasValue
+                    ? Lang.F("第 {0} 轮，{1}", "run #{0}, {1}",
+                             b.BaselineRunId.Value, FormatUtil.Timestamp(b.BaselineTime ?? DateTime.MinValue))
+                    : Lang.T("时间未知（旧版本数据库）", "unknown (database from an older version)");
+                Console.WriteLine(Lang.F(
+                    "      {0}：已固化 {1} 条基准（该根上次扫描：{2}）。",
+                    "      {0}: pinned {1} directory records as the baseline (this root was last scanned at {2}).",
+                    root.DisplayName, FormatUtil.Count(b.CopiedRows), when));
+            }
+            else
+            {
+                Console.WriteLine(Lang.F(
+                    "      {0}：无历史快照，该根本次为首次运行（结果将作为该根后续对比的基准）。",
+                    "      {0}: no previous snapshot; this is the first run for this root "
+                    + "(the result becomes its baseline for later comparisons).",
+                    root.DisplayName));
+            }
+        }
         Console.WriteLine();
 
         // ---------- 增量（USN）与复用策略准备 ----------
-        // 关键约束：USN 基准必须与「上一轮扫描批次」严格对应（state.RunId == prevRun.Id），
-        // 且上一轮的扫描根必须覆盖本轮的根。否则 dir_snapshots 中可能混有更早批次的行，
-        // 而这些行对应的变更已不在 USN 对比区间内，会被误判为「未变更」而复用过期数据。
+        // 关键约束：USN 对比区间 [基准位置, 现在] 必须覆盖「该根基准行采集之后」的全部变更。
+        // USN 状态在扫描完成后记录（state.RunId = 记录它的批次），而 dir_snapshots 按根轮换、
+        // 每根的基准行来自该根最近一次扫描（root_last_scan.run_id）。因此按根放宽后的判据是：
+        //   state.RunId ≤ 该根最近扫描批次
+        // USN 区间起点早于基准采集点时只是「多含一段变更」（多余子树会被重扫，安全）；
+        // 反之若 USN 基准晚于基准行，中间的变更不在区间内，复用会漏检 ⇒ 必须全量。
         var settings = ScanSettings.From(opt);
         var stageWriter = new StageWriter(db);
         var policies = new Dictionary<string, ReusePolicy>(StringComparer.OrdinalIgnoreCase);
@@ -368,17 +391,10 @@ internal static class Program
         }
         else
         {
-            // StringSplitOptions.TrimEntries 是 .NET 5+ 才有，这里显式 Trim 以兼容 net45
-            var prevRoots = (prevRun?.Roots ?? string.Empty)
-                .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => s.Trim())
-                .Where(s => s.Length > 0)
-                .ToArray();
+            var lastScans = db.GetRootLastScans();
 
-            bool StateMatchesPrevRun(DatabaseService.VolumeStateInfo s) => prevRun != null && s.RunId == prevRun.Id;
-            bool PrevRunCovers(ScanRoot root) => prevRoots.Any(p =>
-                root.Path.Equals(p, StringComparison.OrdinalIgnoreCase) ||
-                root.Path.StartsWith(p.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+            bool UsnCoversRoot(ScanRoot root, DatabaseService.VolumeStateInfo s) =>
+                lastScans.TryGetValue(root.Key, out var ls) && s.RunId <= ls.RunId;
 
             foreach (var letter in roots
                          .Select(r => RootVolumeLetter(r.Path))
@@ -394,16 +410,17 @@ internal static class Program
                                + "(the next run can be incremental).", letter));
                     continue;
                 }
-                if (!StateMatchesPrevRun(saved))
+
+                var volRoots = roots.Where(r => RootVolumeLetter(r.Path) == letter).ToList();
+                if (!volRoots.Any(r => UsnCoversRoot(r, saved)))
                 {
-                    // 注意：最常见的原因不是「回退 / 根集合变化」，而是上一轮没有以管理员身份运行 ——
+                    // 注意：最常见的原因不是「根集合变化」，而是上一轮没有以管理员身份运行 ——
                     // 读 USN 变更日志要先打开卷设备 \\.\X:（需要管理员权限），打不开就拿不到新的
-                    // (JournalId, NextUsn)，卷状态写不回去 ⇒ 保存值永远停在最后一次管理员运行的位置，
-                    // 于是每一轮都判定「不对应」并全量扫描。所以这里必须把这条原因排在前面，
-                    // 否则会把排查方向带偏。
-                    Dev(Lang.F("[增量] {0}: USN 状态与上一轮扫描批次不对应，本次全量扫描。",
-                               "[Incremental] {0}: the USN state does not match the previous scan run; full scan this time.",
-                               letter));
+                    // (JournalId, NextUsn)，卷状态写不回去 ⇒ 保存值永远停在最后一次管理员运行的位置。
+                    // 所以这里必须把这条原因排在前面，否则会把排查方向带偏。
+                    Dev(Lang.F("[增量] {0}: USN 状态与各扫描根的最近扫描批次不对应，本次全量扫描。",
+                               "[Incremental] {0}: the USN state does not line up with any scanned root's "
+                               + "latest run; full scan this time.", letter));
                     Dev(Lang.T("      最常见的原因是上一轮未以管理员身份运行（读 USN 变更日志需要管理员权限，"
                                + "卷状态写不回去）；其次才是上次扫描曾回退或扫描根集合变化。",
                                "      The most common cause is that the previous run was not elevated (reading the USN "
@@ -428,13 +445,15 @@ internal static class Program
                     continue;
                 }
 
-                foreach (var root in roots.Where(r => RootVolumeLetter(r.Path) == letter))
+                foreach (var root in volRoots)
                 {
-                    if (!PrevRunCovers(root))
+                    if (!UsnCoversRoot(root, saved))
                     {
-                        Dev(Lang.F("      [增量:{0}:] 上一轮未覆盖「{1}」所在区域，该根本次全量扫描。",
-                                   "      [Incremental:{0}:] the previous run did not cover the area of \"{1}\"; "
-                                   + "this root is fully rescanned.", letter, root.DisplayName));
+                        Dev(Lang.F("      [增量:{0}:] 「{1}」的最近一次扫描早于该卷的 USN 基准批次（或无记录），"
+                                   + "该根本次全量扫描。",
+                                   "      [Incremental:{0}:] \"{1}\" was last scanned before this volume's USN "
+                                   + "baseline run (or has no record); this root is fully rescanned.",
+                                   letter, root.DisplayName));
                         continue;
                     }
 
@@ -464,7 +483,7 @@ internal static class Program
                                    FormatUtil.Count(change.ChangedRecords),
                                    FormatUtil.Count(change.DirtyPaths.Count)));
 
-                    // 该根必须有上一轮基准行才允许复用（无基准时无从复用）
+                    // 该根必须有基准行才允许复用（无基准时无从复用）
                     if (db.CountPrevRows(root) > 0)
                         policies[root.Key] = new ReusePolicy(change.DirtyPaths, root.Path);
                 }
@@ -587,14 +606,14 @@ internal static class Program
         };
         db.CommitStaging(roots, run);
         Console.WriteLine(Lang.F("      已提交，批次 #{0}。", "      Committed, run #{0}.", run.Id));
-        // 只在真有残留时提示：这是「上一轮的扫描根集合与本轮不同」的一次性事件，之后恒为 0。
-        if (db.LastStaleRowsPurged > 0)
+        // 只在扫描根集合与本轮不同时提示：其余根各自最近一轮的快照被保留，
+        // 之后这些根再次被扫到时即可直接与自己的上次结果对比（不再判「首次运行」）。
+        if (db.LastRetainedRows > 0)
             Console.WriteLine(Lang.F(
-                "      顺带清掉 {0} 行不属于本轮扫描根的旧快照"
-                + "（快照表现在只保留最近一轮；留着它们会让「上一轮对比」的基准失真）。",
-                "      Also purged {0} stale snapshot rows outside this run's scan roots "
-                + "(the snapshot table now keeps only the latest run; leaving them would distort the \"previous run\" baseline).",
-                FormatUtil.Count(db.LastStaleRowsPurged)));
+                "      已保留其他扫描根的历史快照 {0} 行（各自对应其最近一次扫描，扩回扫描范围时继续作为基准）。",
+                "      Kept {0} snapshot rows of other scan roots (each from its own latest scan; they remain "
+                + "the baseline when those roots are scanned again).",
+                FormatUtil.Count(db.LastRetainedRows)));
 
         // ---------- 保存 USN 状态（供下次增量） ----------
         // 增量路径：保存 Collect 返回的新位置；全扫路径：查询当前位置保存。
@@ -638,7 +657,8 @@ internal static class Program
             opt.DetailTop,
             opt.DetailMinBytes,
             isFirstRun,
-            prevScanTime);
+            prevScanTime,
+            baselines);
         Console.WriteLine(Lang.T("      对比完成。", "      Comparison complete."));
 
         // 为进入报告候选集的目录（榜单 / 新增消失 / 明细）标注已知用途。

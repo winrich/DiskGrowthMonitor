@@ -26,13 +26,21 @@ public sealed class DatabaseService : IDisposable
     public string DatabasePath { get; }
 
     /// <summary>
-    /// 最近一次 <see cref="CommitStaging"/> 清理掉的「不属于本轮任何扫描根」的旧快照行数。
+    /// 最近一次 <see cref="CommitStaging"/> 中「不属于本轮任何扫描根、因而被保留」的旧快照行数。
     ///
-    /// 仅供调用方打印提示用（快照表已改为整表重建，只保留最近一轮）。正常情况下它只在
-    /// 「上一轮的扫描根集合与本轮不同」时非 0 —— 例如先用 <c>-d c,d</c> 跑过一轮、之后
-    /// 一直只跑 <c>-d c</c>，则 D 盘的旧行会在这轮被清掉（2026-09-24 实测残量 144,296 行）。
+    /// dir_snapshots 按「根」轮换：本轮扫到的根整根换新，其余根保留各自最近一轮的行
+    /// （多盘轮换 <c>-d c,d → -d c → -d c,d</c> 时，扩回的 D 盘要用它自己上一次的快照做基准）。
+    /// 该值只在「上一轮的扫描根集合与本轮不同」时非 0，供调用方打印一条保留提示。
     /// </summary>
-    public long LastStaleRowsPurged { get; private set; }
+    public long LastRetainedRows { get; private set; }
+
+    /// <summary>单个扫描根固化基准的结果（<see cref="BeginPrevSnapshot"/> 的返回项）。</summary>
+    public sealed record RootBaselineInfo(
+        string RootKey,
+        long CopiedRows,
+        /// <summary>基准行所属的扫描批次（来自 root_last_scan；老库回填失败时为 null）。</summary>
+        long? BaselineRunId,
+        DateTime? BaselineTime);
 
     /// <summary>
     /// 目录行路径前缀匹配键。根路径已是 <c>"C:\"</c>（盘符根）时原样返回，否则补一个分隔符。
@@ -192,6 +200,17 @@ public sealed class DatabaseService : IDisposable
             updated     TEXT    NOT NULL
         );
 
+        -- 每个扫描根最近一次被扫描的批次与时间。
+        -- dir_snapshots 按「根」轮换（每根只保留该根最近一轮的行），本表回答「这一行数据
+        -- 来自第几轮」：多盘轮换扫描（-d c,d → -d c → -d c,d）时，扩回的根要拿它自己
+        -- 上一次的快照做基准，报告据此如实标注「与该根上次扫描（第 N 轮）对比」，
+        -- USN 增量判据也据此放宽为「USN 基准批次 ≤ 该根最近扫描批次」。
+        CREATE TABLE IF NOT EXISTS root_last_scan (
+            root_key  TEXT    NOT NULL PRIMARY KEY,
+            run_id    INTEGER NOT NULL,
+            scan_time TEXT    NOT NULL
+        );
+
         -- 目录用途知识库：给报告中的已知目录附上用途说明（浏览器缓存 / 系统日志 / 临时文件…）
         -- 属「配置数据」而非业务数据：ResetAll() 不会清空本表。
         -- builtin=1 的内置条目仅在 pattern 缺失时补齐，绝不覆盖用户对已有条目的修改。
@@ -222,6 +241,74 @@ public sealed class DatabaseService : IDisposable
         cmd.ExecuteNonQuery();
 
         MigrateSchema();
+        BackfillRootLastScan();
+    }
+
+    /// <summary>
+    /// 老库回填 root_last_scan：表刚引入时，dir_snapshots 里已有各根的行、root_last_scan 却是空的。
+    /// 从 scan_runs 反查每个 root_key 最近一次出现在哪个批次的 roots 清单里（roots 列就是
+    /// 逗号分隔的 root_key 集合，见 Program 构造 ScanRun.Roots），取最新的一条回填。
+    /// 只在 root_last_scan 为空且 dir_snapshots 非空时执行一次；之后每轮提交都会正常维护该表。
+    /// </summary>
+    private void BackfillRootLastScan()
+    {
+        long haveRoots, haveSnapshots;
+        using (var c = _conn.CreateCommand())
+        {
+            c.CommandText = "SELECT (SELECT COUNT(*) FROM root_last_scan), (SELECT COUNT(*) FROM dir_snapshots);";
+            using var r = c.ExecuteReader();
+            r.Read();
+            haveRoots = r.GetInt64(0);
+            haveSnapshots = r.GetInt64(1);
+        }
+        if (haveRoots > 0 || haveSnapshots == 0) return;
+
+        var runs = new List<(long Id, string[] Roots, DateTime Time)>();
+        using (var c = _conn.CreateCommand())
+        {
+            c.CommandText = "SELECT id, roots, scan_time FROM scan_runs ORDER BY id;";
+            using var r = c.ExecuteReader();
+            while (r.Read())
+            {
+                runs.Add((r.GetInt64(0),
+                          r.GetString(1).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries),
+                          DateTime.Parse(r.GetString(2))));
+            }
+        }
+        if (runs.Count == 0) return;
+
+        var rootKeys = new List<string>();
+        using (var c = _conn.CreateCommand())
+        {
+            c.CommandText = "SELECT DISTINCT root_key FROM dir_snapshots;";
+            using var r = c.ExecuteReader();
+            while (r.Read()) rootKeys.Add(r.GetString(0));
+        }
+
+        using var tx = _conn.BeginTransaction();
+        using (var ins = _conn.CreateCommand())
+        {
+            ins.Transaction = tx;
+            ins.CommandText = "INSERT OR IGNORE INTO root_last_scan(root_key, run_id, scan_time) VALUES ($k, $r, $t);";
+            ins.Parameters.Add("$k", DbType.String);
+            ins.Parameters.Add("$r", DbType.Int64);
+            ins.Parameters.Add("$t", DbType.String);
+            foreach (var key in rootKeys)
+            {
+                for (int i = runs.Count - 1; i >= 0; i--)
+                {
+                    if (runs[i].Roots.Any(p => string.Equals(p.Trim(), key, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        ins.Parameters["$k"].Value = key;
+                        ins.Parameters["$r"].Value = runs[i].Id;
+                        ins.Parameters["$t"].Value = FormatUtil.Timestamp(runs[i].Time);
+                        ins.ExecuteNonQuery();
+                        break;
+                    }
+                }
+            }
+        }
+        tx.Commit();
     }
 
     /// <summary>
@@ -296,9 +383,11 @@ public sealed class DatabaseService : IDisposable
 
     /// <summary>
     /// 把当前快照中待重扫根的上一版数据固化到 dir_snapshots_prev。
-    /// 必须在扫描开始前调用。返回复制的行数（0 表示首次运行）。
+    /// 必须在扫描开始前调用。dir_snapshots 按「根」轮换（每根只保留该根最近一轮的行），
+    /// 因此复制到的就是该根上一次扫描的快照 —— 即使中间有几轮没扫这个根（多盘轮换）也成立。
+    /// 返回每个根的固化结果（总复制行数为 0 表示整体首次运行）。
     /// </summary>
-    public long BeginPrevSnapshot(IReadOnlyList<ScanRoot> roots)
+    public List<RootBaselineInfo> BeginPrevSnapshot(IReadOnlyList<ScanRoot> roots)
     {
         using var tx = _conn.BeginTransaction();
 
@@ -310,7 +399,8 @@ public sealed class DatabaseService : IDisposable
             del.ExecuteNonQuery();
         }
 
-        long copied = 0;
+        var lastScans = GetRootLastScans();
+        var result = new List<RootBaselineInfo>(roots.Count);
         foreach (var root in roots)
         {
             using var cmd = _conn.CreateCommand();
@@ -329,11 +419,28 @@ public sealed class DatabaseService : IDisposable
             cmd.Parameters.AddWithValue("$path", root.Path);
             cmd.Parameters.AddWithValue("$plen", PrefixOf(root.Path).Length);
             cmd.Parameters.AddWithValue("$prefix", PrefixOf(root.Path));
-            copied += cmd.ExecuteNonQuery();
+            long copied = cmd.ExecuteNonQuery();
+
+            result.Add(lastScans.TryGetValue(root.Key, out var ls)
+                ? new RootBaselineInfo(root.Key, copied, ls.RunId, ls.ScanTime)
+                : new RootBaselineInfo(root.Key, copied, null, null));
         }
 
         tx.Commit();
-        return copied;
+        return result;
+    }
+
+    /// <summary>读取每个扫描根最近一次被扫描的批次（root_key → 批次 id 与时间）。</summary>
+    public Dictionary<string, (long RunId, DateTime ScanTime)> GetRootLastScans(
+        StringComparer? comparer = null)
+    {
+        var map = new Dictionary<string, (long, DateTime)>(comparer ?? StringComparer.OrdinalIgnoreCase);
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT root_key, run_id, scan_time FROM root_last_scan;";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            map[r.GetString(0)] = (r.GetInt64(1), DateTime.Parse(r.GetString(2)));
+        return map;
     }
 
     /// <summary>上一轮基线中的目录行数（用于判断是否首次运行）。</summary>
@@ -509,8 +616,9 @@ public sealed class DatabaseService : IDisposable
     // ------------------------------------------ 阶段三：单事务提交并轮换快照
 
     /// <summary>
-    /// 单个事务内完成：清空旧快照（整表重建）→ 迁入暂存表 → 删除暂存表 → 写入扫描批次。
-    /// 返回新批次的 id。被清掉的「非本轮扫描根」残留行数见 <see cref="LastStaleRowsPurged"/>。
+    /// 单个事务内完成：按本轮扫描根轮换快照（其余根保留各自最近一轮）→ 迁入暂存表 →
+    /// 删除暂存表 → 写入扫描批次 → 更新 root_last_scan。
+    /// 返回新批次的 id。被保留的「非本轮扫描根」行数见 <see cref="LastRetainedRows"/>。
     /// </summary>
     public long CommitStaging(IReadOnlyList<ScanRoot> roots, ScanRun run)
     {
@@ -522,47 +630,55 @@ public sealed class DatabaseService : IDisposable
 
         using var tx = _conn.BeginTransaction();
 
-        // 1) 整表清空后整体重建：dir_snapshots 的语义是「**只保存最近一轮**的扫描结果」。
+        // 1) dir_snapshots 按「根」轮换：本轮扫到的根整根换新，其余根保留各自最近一轮的行。
         //
-        // 🔴 为什么不能像旧实现那样「只删本轮根范围内的旧行」：旧写法会让其它扫描根的历史行
-        // 永久驻留（本意是「留住其它盘的历史」），但 dir_snapshots 里没有任何列标记这些行的
-        // 轮次 ⇒ BeginPrevSnapshot 在下一轮扫到那个根时会把它们当成「上一轮基准」捞出来，
-        // 而它们实际来自若干轮之前 —— 报告于是声称「与上一轮对比」，报出来的却是跨越 N 轮的
-        // 累积增长（2026-09-24 实测：只扫 C 的库里躺着 144,296 行 D 盘旧行，来自更早一轮的
-        // -d c,d）。整表重建后「上一轮」必然是真的上一轮；代价是多盘轮换使用时，切回某个盘的
-        // 那一轮会被判为「首次运行」（无基准）—— 这是**诚实**的行为，拿旧行冒充基准才是错的。
+        // 为什么不能「整表清空只留最近一轮」（第 62 轮前的过渡做法）：多盘轮换扫描时
+        // （-d c,d → -d c → -d c,d），扩回的根会被判「首次运行」、丢掉与自己上次扫描的
+        // 对比基准。也不允许回到更早的「留旧行冒充上一轮」：root_last_scan 表记录了每个根
+        // 的数据来自第几轮，报告与 USN 判据据此如实区分「与上一轮对比」和
+        // 「与该根上次扫描（第 N 轮）对比」—— 基准可以旧，标注必须诚实。
         //
-        // 安全性：stage 表即本轮全部扫描结果（含增量复用复制进来的行），故整体重建不会丢数据。
-        // 原「按根+路径前缀删」的用途（覆盖「上轮 -r 扫子目录、本轮 -d 扫整盘」的根变化、避免
-        // 同路径两条 root_key 冲突）本就包含在整表清空里。
-        long staleRows = 0;
+        // 删除谓词必须与 BeginPrevSnapshot 的取行口径完全一致（含「换根」场景，
+        // 如 -r C:\Users → -d c：旧 root_key 的行也要被本轮换掉），否则同一目录会因
+        // PRIMARY KEY(path) 冲突导致提交失败。
+        //
+        // 安全性：stage 表即本轮全部扫描结果（含增量复用复制进来的行），故按根重建不会丢数据。
+        long retainedRows = 0;
         if (roots.Count > 0)
         {
-            // 先数出「不属于本轮任何扫描根」的残留行：仅用于向用户交代清理量（逻辑上整表都要重建）。
-            // 判据必须与 BeginPrevSnapshot 的取行口径一致，否则同一盘换根（如 -r C:\Users → -d c）
-            // 造成的残留会被漏报。roots 为空时不做此查询（谓词会退化成空串导致语法错）。
             var ors = new List<string>();
-            using var cnt = _conn.CreateCommand();
-            cnt.Transaction = tx;
-            for (int i = 0; i < roots.Count; i++)
+            void AddRootParams(SQLiteCommand c)
             {
-                ors.Add($"(root_key = $k{i} OR path = $p{i} OR substr(path, 1, $l{i}) = $x{i})");
-                cnt.Parameters.AddWithValue($"$k{i}", roots[i].Key);
-                cnt.Parameters.AddWithValue($"$p{i}", roots[i].Path);
-                cnt.Parameters.AddWithValue($"$l{i}", PrefixOf(roots[i].Path).Length);
-                cnt.Parameters.AddWithValue($"$x{i}", PrefixOf(roots[i].Path));
+                for (int i = 0; i < roots.Count; i++)
+                {
+                    c.Parameters.AddWithValue($"$k{i}", roots[i].Key);
+                    c.Parameters.AddWithValue($"$p{i}", roots[i].Path);
+                    c.Parameters.AddWithValue($"$l{i}", PrefixOf(roots[i].Path).Length);
+                    c.Parameters.AddWithValue($"$x{i}", PrefixOf(roots[i].Path));
+                }
             }
-            cnt.CommandText = $"SELECT COUNT(*) FROM dir_snapshots WHERE NOT ({string.Join(" OR ", ors)});";
-            staleRows = Convert.ToInt64(cnt.ExecuteScalar());
-        }
-        LastStaleRowsPurged = staleRows;
 
-        using (var del = _conn.CreateCommand())
-        {
-            del.Transaction = tx;
-            del.CommandText = "DELETE FROM dir_snapshots;";
-            del.ExecuteNonQuery();
+            // 统计「不属于本轮任何扫描根」而被保留的行（= 其他根最近一轮的数据），供提示用
+            using (var cnt = _conn.CreateCommand())
+            {
+                cnt.Transaction = tx;
+                for (int i = 0; i < roots.Count; i++)
+                    ors.Add($"(root_key = $k{i} OR path = $p{i} OR substr(path, 1, $l{i}) = $x{i})");
+                AddRootParams(cnt);
+                cnt.CommandText = $"SELECT COUNT(*) FROM dir_snapshots WHERE NOT ({string.Join(" OR ", ors)});";
+                retainedRows = Convert.ToInt64(cnt.ExecuteScalar());
+            }
+
+            // 只删除本轮扫描根范围内的旧行（与上面统计同一谓词集合，参数必须各自绑定）
+            using (var del = _conn.CreateCommand())
+            {
+                del.Transaction = tx;
+                del.CommandText = $"DELETE FROM dir_snapshots WHERE {string.Join(" OR ", ors)};";
+                AddRootParams(del);
+                del.ExecuteNonQuery();
+            }
         }
+        LastRetainedRows = retainedRows;
 
         // 2) 迁入本轮扫描结果
         using (var move = _conn.CreateCommand())
@@ -600,6 +716,30 @@ public sealed class DatabaseService : IDisposable
             ins.Parameters.AddWithValue("$e", run.ElapsedMs);
             ins.Parameters.AddWithValue("$first", run.IsFirstRun ? 1 : 0);
             run.Id = Convert.ToInt64(ins.ExecuteScalar());
+        }
+
+        // 5) 记录每个根本次扫描所属的批次：报告按根标注基准来源、USN 判据按根放宽，都靠它。
+        //    必须在第 4 步拿到 run.Id 之后执行。
+        using (var upd = _conn.CreateCommand())
+        {
+            upd.Transaction = tx;
+            upd.CommandText = """
+                INSERT INTO root_last_scan(root_key, run_id, scan_time)
+                VALUES ($k, $r, $t)
+                ON CONFLICT(root_key) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    scan_time = excluded.scan_time;
+                """;
+            upd.Parameters.AddWithValue("$k", string.Empty);
+            upd.Parameters.AddWithValue("$r", 0L);
+            upd.Parameters.AddWithValue("$t", string.Empty);
+            foreach (var root in roots)
+            {
+                upd.Parameters["$k"].Value = root.Key;
+                upd.Parameters["$r"].Value = run.Id;
+                upd.Parameters["$t"].Value = FormatUtil.Timestamp(run.ScanTime);
+                upd.ExecuteNonQuery();
+            }
         }
 
         tx.Commit();

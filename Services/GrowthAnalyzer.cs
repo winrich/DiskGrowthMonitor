@@ -33,6 +33,9 @@ public sealed class AnalysisResult
     public long TotalBytes { get; set; }
     public long? PrevTotalBytes { get; set; }
 
+    /// <summary>是否存在「首次记录」（无自身基准）的扫描根 —— 概览区据此调整「相比上次」口径。</summary>
+    public bool HasRootsWithoutBaseline { get; set; }
+
     /// <summary>增长榜在应用阈值后为空、已自动降级为「未应用阈值」时的提示。</summary>
     public bool GrowthFallbackUsed { get; set; }
     /// <summary>详细明细在应用阈值后为空、已自动降级为「未应用阈值」时的提示。</summary>
@@ -62,7 +65,8 @@ public sealed class GrowthAnalyzer
         int detailTop,
         long detailMinBytes,
         bool isFirstRun,
-        DateTime? prevScanTime)
+        DateTime? prevScanTime,
+        IReadOnlyList<DatabaseService.RootBaselineInfo>? baselines = null)
     {
         var result = new AnalysisResult
         {
@@ -70,16 +74,24 @@ public sealed class GrowthAnalyzer
             PrevScanTime = prevScanTime
         };
 
+        var baselineByKey = new Dictionary<string, DatabaseService.RootBaselineInfo>(StringComparer.OrdinalIgnoreCase);
+        if (baselines != null)
+            foreach (var b in baselines)
+                baselineByKey[b.RootKey] = b;
+
         BuildTempTable(roots);
 
         try
         {
             // 各扫描根自身的子树累计（depth = 0 的行即为根）
-            result.Roots.AddRange(QueryRootComparisons(roots, isFirstRun));
+            result.Roots.AddRange(QueryRootComparisons(roots, baselineByKey));
+            result.HasRootsWithoutBaseline = result.Roots.Any(r => r.PrevBytes == null);
             result.TotalBytes = result.Roots.Sum(r => r.CurrBytes ?? 0);
+            // 「相比上次」只在有基准的根上计算：无基准根（首次记录）的 curr 若计入，
+            // 会被整体当成「增长」虚增变化量
             result.PrevTotalBytes = isFirstRun
                 ? null
-                : result.Roots.Sum(r => r.PrevBytes ?? 0);
+                : result.Roots.Where(r => r.PrevBytes != null).Sum(r => r.PrevBytes ?? 0);
 
             QuerySummary(result.Summary, roots);
             result.Summary.ComparedCount = CountRows(null);
@@ -191,7 +203,9 @@ public sealed class GrowthAnalyzer
 
     // ------------------------------------------------------------ 各根对比
 
-    private List<RootComparison> QueryRootComparisons(IReadOnlyList<ScanRoot> roots, bool isFirstRun)
+    private List<RootComparison> QueryRootComparisons(
+        IReadOnlyList<ScanRoot> roots,
+        IReadOnlyDictionary<string, DatabaseService.RootBaselineInfo> baselineByKey)
     {
         var p = new List<SQLiteParameter>();
         string filter = BuildRootFilter(roots, p);
@@ -236,7 +250,10 @@ public sealed class GrowthAnalyzer
                     GrowthPercent = prev == null || prev == 0
                         ? double.NaN
                         : growth * 100.0 / prev.Value,
-                    IsFirstRun = isFirstRun
+                    // 按根判定首次记录：该根没有自己的基准（与整体是否首次运行无关）
+                    IsFirstRun = prev == null,
+                    BaselineRunId = baselineByKey.TryGetValue(key, out var bl) ? bl.BaselineRunId : null,
+                    BaselineTime = baselineByKey.TryGetValue(key, out var bl2) ? bl2.BaselineTime : null
                 };
 
                 if (rc.Path.Length >= 2 && rc.Path[1] == ':')
@@ -263,7 +280,8 @@ public sealed class GrowthAnalyzer
                     RootKey = root.Key,
                     Path = root.Path,
                     DisplayName = root.DisplayName,
-                    IsFirstRun = isFirstRun
+                    // 快照里连 depth=0 的根行都没有 ⇒ 该根本轮没有数据，视作首次记录
+                    IsFirstRun = true
                 });
         }
         return list;
@@ -283,7 +301,9 @@ public sealed class GrowthAnalyzer
         PrevFiles = src.PrevFiles,
         CurrFiles = src.CurrFiles,
         CurrDirs = src.CurrDirs,
-        IsFirstRun = src.IsFirstRun
+        IsFirstRun = src.IsFirstRun,
+        BaselineRunId = src.BaselineRunId,
+        BaselineTime = src.BaselineTime
     };
 
     // ------------------------------------------------------------ 汇总统计

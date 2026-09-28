@@ -149,6 +149,23 @@ public static class ReportBuilder
                            + "the baseline for future comparisons.\n"));
             sb.Append("</div>\n");
         }
+        else if (m.Analysis.HasRootsWithoutBaseline)
+        {
+            // 混合场景：本轮扩回了此前没扫的根（如 -d c,d → -d c → -d c,d）。
+            // 新根没有自己的基准，其全部目录记为「新增」；页头必须说明，否则增长榜会被误读。
+            var fresh = string.Join(ListSep, m.Analysis.Roots
+                .Where(r => r.PrevBytes == null)
+                .Select(r => FormatUtil.Html(r.DisplayName)));
+            sb.Append("<div class=\"notice notice-info\">\n");
+            sb.Append("  <strong>").Append(Lang.T("以下扫描根为首次记录：", "The following scan roots are recorded for the first time: "))
+              .Append(fresh).Append("。</strong>\n");
+            sb.Append(Lang.T("  它们在库中没有自己的历史基准，本轮其全部目录均记为「新增」，不计入「相比上次变化」；"
+                           + "本次结果已作为这些根后续对比的基准。\n",
+                             "  They have no baseline of their own in the database, so all of their directories are "
+                           + "recorded as \"new\" this run and are excluded from the overall change figure; this run "
+                           + "becomes their baseline for future comparisons.\n"));
+            sb.Append("</div>\n");
+        }
     }
 
     // ---------------------------------------------------------------- 概览区
@@ -168,6 +185,17 @@ public static class ReportBuilder
         {
             Kpi(sb, Lang.T("相比上次变化", "Change vs. previous run"), "—", "flat",
                 Lang.T("无历史基准", "no historical baseline"));
+        }
+        else if (a.HasRootsWithoutBaseline)
+        {
+            // 混合场景：只有带基准的根参与「相比上次」计算，首次记录的根若计入会被虚增成增长
+            long net = a.Roots.Where(r => r.PrevBytes != null)
+                .Sum(r => (r.CurrBytes ?? 0) - (r.PrevBytes ?? 0));
+            string cls = net > 0 ? "up" : net < 0 ? "down" : "flat";
+            Kpi(sb, Lang.T("相比上次变化", "Change vs. previous run"), FormatUtil.SignedBytes(net), cls,
+                Lang.F("另有 {0} 个扫描根首次记录，未计入对比",
+                       "{0} root(s) recorded for the first time, excluded from this figure",
+                       a.Roots.Count(r => r.PrevBytes == null)));
         }
         else
         {
@@ -382,16 +410,32 @@ public static class ReportBuilder
 
         foreach (var r in m.Analysis.Roots)
         {
-            string cls = m.IsFirstRun ? "flat" : r.GrowthBytes > 0 ? "up" : r.GrowthBytes < 0 ? "down" : "flat";
+            // 按根判定「首次记录」：该根在库里没有自己的基准（与整体是否首次运行无关）
+            bool noBase = r.PrevBytes == null;
+            string cls = noBase ? "flat" : r.GrowthBytes > 0 ? "up" : r.GrowthBytes < 0 ? "down" : "flat";
             sb.Append("<tr>\n");
-            sb.Append("  <td class=\"root-name\">").Append(FormatUtil.Html(r.DisplayName)).Append("</td>\n");
+            sb.Append("  <td class=\"root-name\">").Append(FormatUtil.Html(r.DisplayName));
+            if (noBase)
+            {
+                sb.Append("<div class=\"sub\">").Append(Lang.T("首次记录（本轮建立基准）", "First record (baseline established this run)")).Append("</div>");
+            }
+            else if (r.BaselineRunId.HasValue && r.BaselineRunId.Value != m.PreviousRunId)
+            {
+                // 基准不是紧邻的上一轮（多盘轮换后扩回该根）：如实标注基准来自哪一轮
+                sb.Append("<div class=\"sub\">").Append(Lang.F(
+                    "与该根上次扫描对比（第 {0} 轮，{1}）",
+                    "Compared with this root's own last scan (run #{0}, {1})",
+                    r.BaselineRunId.Value,
+                    FormatUtil.Timestamp(r.BaselineTime ?? DateTime.MinValue))).Append("</div>");
+            }
+            sb.Append("</td>\n");
             sb.Append("  <td class=\"num\">").Append(FormatUtil.Bytes(r.CurrBytes ?? 0)).Append("</td>\n");
             sb.Append("  <td class=\"num sub\">")
-              .Append(m.IsFirstRun ? "—" : FormatUtil.Bytes(r.PrevBytes ?? 0)).Append("</td>\n");
+              .Append(noBase ? "—" : FormatUtil.Bytes(r.PrevBytes ?? 0)).Append("</td>\n");
             sb.Append("  <td class=\"num v-").Append(cls).Append("\">")
-              .Append(m.IsFirstRun ? "—" : FormatUtil.SignedBytes(r.GrowthBytes)).Append("</td>\n");
+              .Append(noBase ? "—" : FormatUtil.SignedBytes(r.GrowthBytes)).Append("</td>\n");
             sb.Append("  <td class=\"num v-").Append(cls).Append("\">")
-              .Append(m.IsFirstRun ? "—" : FormatUtil.SignedPercent(r.GrowthPercent)).Append("</td>\n");
+              .Append(noBase ? "—" : FormatUtil.SignedPercent(r.GrowthPercent)).Append("</td>\n");
             sb.Append("  <td class=\"num sub\">").Append(FormatUtil.Count(r.CurrDirs)).Append("</td>\n");
             sb.Append("  <td class=\"num sub\">").Append(FormatUtil.Count(r.CurrFiles)).Append("</td>\n");
             sb.Append("  <td class=\"num sub\">")

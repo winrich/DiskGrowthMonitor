@@ -1,414 +1,417 @@
-# DiskGrowthMonitor · 磁盘空间增长监控
+# DiskGrowthMonitor · Disk Space Growth Monitor
 
-[**English**](README_EN.md) | 简体中文
+**English** | [简体中文](README_zh.md)
 
-递归扫描全盘目录占用 → 存入本地 SQLite → 下次运行与上一轮快照**逐目录对比** → 输出增长最快 / 缩减最多的目录，并生成一份自包含的 HTML 报告；对已知目录自动标注**用途与可清理性**。
+Recursively scans per-directory disk usage → stores it in a local SQLite database → on the next run, compares it **directory by directory** against the previous snapshot → reports the fastest-growing and most-shrinking directories and generates a self-contained HTML report. Known directories (browser caches, system temp files, logs, crash dumps, application data, …) are annotated with their **purpose and whether they are safe to delete**.
 
-> 它只回答三个问题：**磁盘被谁吃掉了、长了多少、能不能删。**
+> It answers exactly three questions: **what is eating the disk, how much did it grow, and can it be deleted?**
 
-面向 Windows 的单一可执行文件，零前置安装，拷过去就能用；适合放在定时任务里长期跟踪磁盘水位，也适合一次性定位「C 盘又满了」。
+A single Windows executable with zero prerequisites — copy the folder and run. Suitable for tracking disk usage over time from Task Scheduler, or for one-off hunts for "why is C: full again".
 
 ---
 
-## 特性
+## Features
 
-| 特性 | 说明 |
+| Feature | Details |
 |---|---|
-| **零前置安装** | 目标框架 .NET Framework 4.5 —— Windows 7 SP1 以上、Windows Server 2012 以上全部自带；SQLite 原生库随包分发，不依赖 VC / UCRT 运行库 |
-| **增长对比** | 每轮快照入库，与上一轮**逐目录**对比，给出增长榜、缩减榜、新增、消失四类结果，红涨绿降 |
-| **硬链接物理去重** | 按 `(卷序列号, 文件标识)` 去重，`WinSxS` 这类硬链接密集区不会虚高（实测避免重复计入 **15.89 GB / 7.1 万个文件**） |
-| **目录用途知识库** | 内置 **66 条**常见目录（系统临时/缓存/日志/转储、Chrome / Edge / Firefox、微信 / 钉钉 / Teams、VS Code / NuGet / pip …），报告中内联标注用途与三档可清理性，只增不改、可自行扩充 |
-| **知识库豁免** | 命中知识库的目录（含其祖先）每轮重新尝试扫描，不再因历史「权限不足」或默认排除成为**永久盲区** |
-| **增量复用** | 依托 NTFS USN 变更日志判断本轮是否有变更；无变更的扫描根**整棵复用上一轮快照**，端到端秒级完成 |
-| **自适应策略** | 启动探测 OS / 介质 / 文件系统，按卷**运行时实测**决定枚举引擎与并行度，不写死参数 |
-| **中英双语** | 控制台提示与 HTML 报告均为中英双语；`--lang=auto\|zh\|en`，默认按「界面语言 + 控制台代码页」自动判定 |
-| **自包含报告** | 单文件 HTML（内联 CSS/JS），无外部依赖、可离线打开、可直接转发；支持路径搜索、表头排序、状态筛选 |
-| **崩溃安全** | 两阶段提交：扫描期间当前快照全程不动，中途崩溃或断电仍保留上一轮完整基准 |
-| **自动提权** | 需要扫描时自动请求 UAC 并以管理员身份重启，**接管当前终端窗口**，进度条与输出观感不变；取消则降级继续 |
+| **Zero prerequisites** | Targets .NET Framework 4.5 — included with Windows 7 SP1+ and Windows Server 2012+. The native SQLite library ships with the app and depends on neither the VC runtime nor UCRT |
+| **Growth comparison** | Every run is stored as a snapshot and diffed against the previous one per directory: growth, shrink, new and removed, with red-up / green-down colouring |
+| **Physical hard-link deduplication** | Deduplicates by `(volume serial, file ID)`, so hard-link-heavy trees such as `WinSxS` do not inflate. Measured: **15.89 GB / 71k files** avoided from double counting |
+| **Directory knowledge base** | **66** built-in entries (system temp/cache/logs/dumps, Chrome / Edge / Firefox, WeChat / DingTalk / Teams, VS Code / NuGet / pip, …). Report rows are annotated in place with purpose and one of three cleanability levels. Insert-only, and you can add your own |
+| **Knowledge-base exemption** | Directories matching the knowledge base (or having a matching ancestor) are re-attempted every run, so a stale "access denied" record or a default exclusion can never turn them into a **permanent blind spot** |
+| **Incremental reuse** | Uses the NTFS USN change journal to detect whether a scan root actually changed; unchanged roots **reuse the previous snapshot wholesale**, finishing in seconds |
+| **Adaptive strategy** | Probes OS, storage media and file system at startup, then picks the enumeration engine and parallelism **from per-volume runtime measurements** instead of hard-coded parameters |
+| **Bilingual** | Console messages and the HTML report are bilingual (Chinese / English); `--lang=auto\|zh\|en`, defaulting to automatic detection from UI language + console code page |
+| **Self-contained report** | Single HTML file with inlined CSS/JS — no external dependencies, opens offline, safe to forward. Supports path search, column sorting and status filtering |
+| **Crash-safe** | Two-phase commit: the current snapshot is never touched during a scan, so a crash or power loss still leaves the previous baseline intact |
+| **Automatic elevation** | Prompts for UAC and restarts as administrator when a scan needs it, **attaching to the current terminal** so the progress bar and output look identical. Declining UAC degrades gracefully and keeps running |
 
 ---
 
-## 性能
+## Performance
 
-测量环境：Windows 11（Build 26200）/ AMD Ryzen 7 7840H（8 核 16 线程）/ NVMe SSD / C 盘约 **19 万目录、70 万文件**。耗时取程序自报的墙钟，同轮交替复测。
+Measured on Windows 11 (Build 26200), AMD Ryzen 7 7840H (8C/16T), NVMe SSD, C: holding roughly **191k directories and 700k files**. Timings are wall-clock as reported by the program, with runs interleaved.
 
-| 场景 | 耗时 | 说明 |
+| Scenario | Time | Notes |
 |---|---|---|
-| 全盘 C: 首次（建库 + 全量扫描 + 提交 + 报告） | **≈ 20 s** | 端到端 |
-| 全盘 C: 再次运行（USN 无变更，整根复用） | **≈ 1.6 s** | 端到端 |
-| 全盘 C: 再次运行（有变更，增量重扫） | 数秒 ~ 十几秒 | 视变更规模 |
-| 子树 `C:\Windows\System32`（约 1.6 千目录 / 2 万文件） | ≈ 0.2 s | |
-| 子树 `C:\Windows\WinSxS`（12.1 万目录 / 11.6 万文件） | ≈ 11.7 s | 硬链接最密集的区域 |
-| 扫描器本体（`--no-knowledge-rescan`，不含 `C:\Windows` 全树） | 首轮 25.2 s / 次轮 19.9 s | 4.9 万目录 / 27.8 万文件 / 90.2 GB |
+| Full C:, first run (create DB + full scan + commit + report) | **≈ 20 s** | end to end |
+| Full C:, subsequent run (nothing changed; whole root reused) | **≈ 1.6 s** | end to end |
+| Full C:, subsequent run with changes (incremental rescan) | seconds — tens of seconds | depends on change volume |
+| Subtree `C:\Windows\System32` (~1.6k dirs / 20k files) | ≈ 0.2 s | |
+| Subtree `C:\Windows\WinSxS` (121k dirs / 116k files) | ≈ 11.7 s | the most hard-link-dense area on the volume |
+| Scanner core only (`--no-knowledge-rescan`, excluding the `C:\Windows` tree) | 25.2 s first / 19.9 s second | 49k dirs / 278k files / 90.2 GB |
 
-**枚举引擎档位对比**（同一棵树、同一时间窗口交替实测，两者结果口径完全一致，仅速度不同）：
+**Enumeration engine comparison** (same tree, same time window, interleaved runs; all engines produce identical results, only speed differs):
 
-| 档位 | 全盘 C: | 机制 |
+| Engine | Full C: | Mechanism |
 |---|---|---|
-| `auto`（默认，实测取 `extd` 或 `both`） | **14.4 s** | 目录项随枚举直接返回文件标识，去重不再逐文件开句柄 |
-| `win32` | 46.9 s | 兼容回退档：`FindFirstFileExW` + 逐文件 `CreateFileW` 取标识 |
+| `auto` (default; resolves to `extd` or `both` by measurement) | **14.4 s** | The directory entry already carries the file ID, so deduplication needs no per-file handle |
+| `win32` | 46.9 s | Compatibility fallback: `FindFirstFileExW` plus a `CreateFileW` per file to fetch the ID |
 
-### 容量口径
+### Accounting for the numbers
 
-程序统计的是**去重后各文件逻辑大小之和**，与资源管理器显示的「已用空间」天然存在 2% ~ 4% 差额（MFT 保留区、元数据、压缩、簇对齐所致），**不是漏扫**：
+The program reports the **sum of logical file sizes after deduplication**. Explorer's "used space" counts **allocated clusters**, so a 2–4% gap is inherent (MFT reserved area, metadata, compression, cluster rounding) — **not a missed scan**:
 
-| 口径 | 本机 C 盘 |
+| Measure | This machine, C: |
 |---|---|
-| 本次统计（提权 + 全量） | 285.48 GB / 191,902 目录 / 704,963 文件 |
-| 卷已用空间 | 293.68 GB（差 **+2.77%**） |
+| This scan (elevated, full) | 285.48 GB / 191,902 dirs / 704,963 files |
+| Volume used space | 293.68 GB (gap **+2.77%**) |
 
-权限是最大偏差来源：非管理员运行会因读不到而少算约 4%（本机约 12.5 GB）。程序会在报告与日志中**明确列出这一差额及其三个结构性原因**，绝不输出估算的「差额构成」。
+Permissions are the largest source of deviation: running without elevation under-reports by roughly 4% (about 12.5 GB here). The report and console **state the gap and its three structural causes explicitly**, and never emit an estimated breakdown of it.
 
-### 体积与负载
+### Footprint and load
 
-| 项目 | 说明 |
+| Item | Notes |
 |---|---|
-| 数据库体积 | 约每 10 万目录 15 ~ 25 MB；只保留「当前」与「上一轮」两份快照，**不随时间增长** |
-| 磁盘负载 | 单线程顺序 IO，不打满磁盘队列；机械硬盘上仍有明显卡顿 |
-| 反病毒软件 | 实时扫描会显著拖慢，可把程序目录加入排除项 |
-| 长时间运行 | 建议用 Windows 任务计划程序定时执行，例如每周一次 |
+| Database size | ~15–25 MB per 100k directories. Only the current and previous snapshots are kept, so it **does not grow over time** |
+| Disk load | Single-threaded sequential I/O; it will not saturate the disk queue, though mechanical drives still feel sluggish |
+| Antivirus | Real-time scanning slows it down noticeably; consider excluding the program directory |
+| Long-term use | Schedule it with Task Scheduler, e.g. once a week |
 
 ---
 
-## 快速开始
+## Quick start
 
 ```bash
-# 1) 构建（单目标 net45）
+# 1) Build (single target: net45)
 dotnet build -c Release
-#    产物：bin\Release\net45\DiskGrowthMonitor.exe
+#    Output: bin\Release\net45\DiskGrowthMonitor.exe
 
-# 2) 首次运行：建立基准（本次没有对比结果）
+# 2) First run — establish the baseline (no comparison yet)
 DiskGrowthMonitor.exe -d ALL
 
-# 3) 隔一段时间再运行一次：得到增长报告
+# 3) Run again later — get the growth report
 DiskGrowthMonitor.exe -d ALL --open
 ```
 
-> **必须扫两次才有增长数据。** 第一次只是建立基准，第二次才会出现「增长了什么」。
+> **You need two runs before any growth data appears.** The first run only establishes a baseline; the second is what shows "what grew".
 >
-> **注意**：数据库固定为 `<exe 目录>\disk_growth.db`，因此 Debug / Release 以及每个副本目录各有一份独立数据库。日常只用其中一个版本，避免两份数据对不上。
+> **Note**: the database is fixed at `<exe directory>\disk_growth.db`, so Debug / Release and every copied folder each get their own database. Stick to one copy to avoid comparing two different datasets.
 
-### 部署到目标机
+### Deploying to a target machine
 
-把 `bin\Release\net45\` 下的文件整体拷到目标机即可（`publish\` 与 build 输出内容一致）：
+Copy the files from `bin\Release\net45\` together (`publish\` has the same content as the build output):
 
-| 文件 | 说明 |
+| File | Purpose |
 |---|---|
-| `DiskGrowthMonitor.exe` | 主程序（x64） |
-| `DiskGrowthMonitor.exe.config` | 声明所需的 .NET Framework 版本与 GC 模式 |
-| `System.Data.SQLite.dll` | SQLite 托管驱动 |
-| `System.ValueTuple.dll` | 元组支持（.NET Framework 4.7 以下不自带） |
-| `x64\SQLite.Interop.dll` | SQLite 原生引擎，**必须位于 `x64` 子目录**，缺失会启动即崩 |
-| `DiskGrowthMonitor.pdb` | 调试符号，可不拷 |
+| `DiskGrowthMonitor.exe` | main program (x64) |
+| `DiskGrowthMonitor.exe.config` | declares the required .NET Framework version and GC mode |
+| `System.Data.SQLite.dll` | managed SQLite driver |
+| `System.ValueTuple.dll` | tuple support (not in the BCL before .NET Framework 4.7) |
+| `x64\SQLite.Interop.dll` | native SQLite engine; **must stay in the `x64` subdirectory**, missing it means an instant crash |
+| `DiskGrowthMonitor.pdb` | debug symbols, optional |
 
-| 事项 | 要求 |
+| Item | Requirement |
 |---|---|
-| 前置安装 | **不需要**。Windows 7 SP1 / Server 2012 以上均自带 .NET Framework 4.5 或更高 |
-| 系统位数 | **必须 64 位**（exe 固定带 x64 机器头，无法被 32 位宿主加载） |
-| 目录权限 | 程序目录需**可写**（数据库、报告都落在这里）。不要放在 `C:\Program Files` 这类需要提权写入的位置 |
-| 运行权限 | **建议以管理员身份运行**：可减少「权限不足」，并启用 USN 增量复用与 MFT 精确进度百分比。非管理员**不会报错**，但每轮都会退化为全量扫描 |
-| 清理运行产物 | 拷走前删掉 `disk_growth.db` 与 `reports\`，否则目标机首次运行会基于本机旧数据 |
+| Prerequisites | **None.** Windows 7 SP1 and Windows Server 2012 or later all ship .NET Framework 4.5+ |
+| Architecture | **64-bit only** (the exe carries an x64 machine header and cannot be loaded by a 32-bit host) |
+| Folder permissions | The program folder must be **writable** (database and reports live there). Avoid `C:\Program Files` |
+| Run privileges | **Running as administrator is recommended**: fewer access-denied directories, plus USN incremental reuse and accurate progress percentages. Running unelevated **will not error out**, but every run degrades to a full scan |
+| Run artifacts | Delete `disk_growth.db` and `reports\` before copying, otherwise the target machine's first run builds on your old data |
 
 ---
 
-## 命令行参数
+## Command-line reference
 
-### 扫描范围（必须指定其一，二者可同时使用）
+### Scan scope (exactly one required; both may be combined)
 
-| 参数 | 说明 |
+| Option | Description |
 |---|---|
-| `-d, --drive <ALL\|C\|D,...>` | 扫描全部本地**固定**磁盘，或指定盘符（逗号分隔多个） |
-| `-r, --root <目录>` | 只扫描指定目录（可多次指定，用于针对性监控某几棵树） |
+| `-d, --drive <ALL\|C\|D,...>` | Scan all local **fixed** drives, or the listed drive letters (comma-separated) |
+| `-r, --root <directory>` | Scan only the given directory (repeatable, for monitoring a few specific trees) |
 
-`-r` 与 `-d` 混用时，被覆盖的子目录会**自动合并**到父级，不会产生重复记录。
+When `-r` and `-d` overlap, covered subdirectories are **merged** into the parent so no path is recorded twice.
 
-### 报告内容控制
+### Report content
 
-| 参数 | 默认 | 说明 |
+| Option | Default | Description |
 |---|---|---|
-| `-t, --top <N>` | 30 | 增长榜 / 缩减榜条数 |
-| `--detail-top <N>` | 500 | 详细明细表最大行数 |
-| `-m, --min-mb <N>` | 100 | 只报告增长量超过 N MB 的目录 |
-| `-p, --min-percent <N>` | 0 | 只报告增长百分比超过 N% 的目录 |
-| `--detail-min-mb <N>` | 1 | 详细明细表的最小变化量 |
+| `-t, --top <N>` | 30 | Number of growth / shrink leaderboard entries |
+| `--detail-top <N>` | 500 | Maximum rows in the detail table |
+| `-m, --min-mb <N>` | 100 | Only report directories growing by more than N MB |
+| `-p, --min-percent <N>` | 0 | Only report directories growing by more than N% |
+| `--detail-min-mb <N>` | 1 | Minimum change for the detail table |
 
-> 若本轮没有任何目录达到阈值，报告会自动改为显示「变化量最大的 N 个目录」并在页面上标注。
+> If nothing crosses the threshold in a run, the report automatically falls back to showing the N largest movers and says so on the page.
 
-### 排除与跳过
+### Exclusion and skipping
 
-| 参数 | 说明 |
+| Option | Description |
 |---|---|
-| `-x, --exclude <路径前缀>` | 额外排除目录（可多次指定），优先级最高 |
-| `--no-default-exclude` | 不再排除默认目录（`Windows` / `$Recycle.Bin` / `System Volume Information`） |
-| `--reset-skips` | 清空历史「权限不足 / IO 错误」记录，重新尝试扫描这些目录 |
-| `--no-knowledge-rescan` | **关闭知识库豁免**：命中知识库的目录不再突破默认排除与跳过清单（默认开启豁免） |
-| `--follow-reparse` | 跟随目录符号链接与 junction（**默认不跟随**） |
-| `--no-dedup` | 关闭硬链接去重（更快，但会重复计数） |
+| `-x, --exclude <path prefix>` | Extra exclusion (repeatable); takes the highest priority |
+| `--no-default-exclude` | Keep the default exclusions (`Windows` / `$Recycle.Bin` / `System Volume Information`) |
+| `--reset-skips` | Clear recorded "access denied / I/O error" entries and retry those directories |
+| `--no-knowledge-rescan` | **Disable the knowledge-base exemption**, so matching directories no longer bypass default exclusions or the skip list (the exemption is on by default) |
+| `--follow-reparse` | Follow directory symlinks and junctions (**off by default**) |
+| `--no-dedup` | Disable hard-link deduplication (faster, but double counts) |
 
-### 扫描性能
+### Performance
 
-| 参数 | 默认 | 说明 |
+| Option | Default | Description |
 |---|---|---|
-| `--enum-engine <档位>` | `auto` | 目录枚举引擎，取 `auto` / `extd` / `both` / `win32`。**四档结果口径完全一致，只有速度不同** |
-| `--threads <N>` | `0` | 并行扫描线程数。`0` = 按扫描根数量并行，**上限为物理核数**；显式指定时可到逻辑核数。⚠ 并行单位是**扫描根**，只扫一个盘时不会带来并行 |
-| `--full` | — | 强制全量扫描，禁用 USN 增量复用 |
-| `--no-elevate` | — | 不尝试以管理员身份重启自己 |
+| `--enum-engine <engine>` | `auto` | Directory enumeration engine: `auto`, `extd`, `both` or `win32`. **All four produce identical results; only speed differs** |
+| `--threads <N>` | `0` | Parallel scan threads. `0` = one per scan root, **capped at the physical core count**; an explicit value may go up to the logical core count. ⚠ Parallelism is per **scan root**, so scanning a single drive gains nothing |
+| `--full` | — | Force a full scan, disabling USN incremental reuse |
+| `--no-elevate` | — | Do not attempt to restart with administrator rights |
 
-`--enum-engine` 各档含义：
+Engine values:
 
-| 档位 | 机制 | 何时用 |
+| Engine | Mechanism | When to use |
 |---|---|---|
-| `auto` | 按卷实测后依次尝试 `extd → both → win32`，结果按卷缓存 | **默认**，不依赖文档口径 |
-| `extd` | `NtQueryDirectoryFile` + `FileIdExtdDirectoryInformation`，目录项直出 **128 位**文件标识 | 新系统；本机实测最快 |
-| `both` | 同上 64 位版本（Vista / Server 2008 起可用） | 老系统上的保险绳，实测比 `extd` 慢不到 1% |
-| `win32` | `FindFirstFileExW` + 逐文件 `CreateFileW` 取标识 | 兼容回退通道，出问题时**无需改代码**即可切换 |
+| `auto` | Measures per volume and falls back `extd → both → win32`, caching the result per volume | **Default**; does not rely on documented availability claims |
+| `extd` | `NtQueryDirectoryFile` + `FileIdExtdDirectoryInformation`, directory entries carry a **128-bit** file ID | Modern systems; fastest in local tests |
+| `both` | Same, 64-bit variant (available since Vista / Server 2008) | Safety net on older systems; measured within 1% of `extd` |
+| `win32` | `FindFirstFileExW` plus a `CreateFileW` per file | Compatibility fallback — switch with no code changes if anything misbehaves |
 
-### 输出与存储
+### Output and storage
 
-数据库固定为 `<exe 目录>\disk_growth.db`，**不提供开关**；旧命令里残留的 `--db` 会被忽略并打印一行提示。
+The database is fixed at `<exe directory>\disk_growth.db` with **no switch**; a leftover `--db` in old scripts is ignored with a warning line.
 
-| 参数 | 说明 |
+| Option | Description |
 |---|---|
-| `-o, --out <文件路径>` | HTML 报告输出路径，默认 `<exe目录>\reports\disk_growth_report_<时间>.html` |
-| `--no-report` | 只扫描入库，不生成报告 |
-| `--open` | 报告生成后用默认浏览器打开 |
-| `--lang <档位>` | 程序提示文本语言，取 `auto` / `zh` / `en`，默认 `auto`（界面语言与代码页都是中文时用中文，否则英文） |
-| `--show-env` | 探测运行环境（OS / CPU / 内存 / 介质 / 文件系统 / 语言）并打印推导出的扫描策略后退出；**不扫描、不写库** |
-| `--list-drives` | 列出本机磁盘后退出 |
-| `--list-skips` | 列出已记录的跳过清单后退出 |
-| `--list-knowledge` | 列出目录用途知识库条目后退出 |
-| `--reset-db` | 清空数据库全部记录，回到「从未扫描」状态（需交互确认 `y/N`；知识库 `dir_knowledge` 保留） |
-| `--dev` | 开发者模式：额外打印诊断信息（环境明细、增量决策、MFT 估算、枚举引擎探测等），默认关闭 |
-| `-h, --help` | 显示帮助 |
+| `-o, --out <path>` | HTML report path; defaults to `<exe dir>\reports\disk_growth_report_<timestamp>.html` |
+| `--no-report` | Scan and store only, do not generate a report |
+| `--open` | Open the report in the default browser when done |
+| `--lang <auto\|zh\|en>` | Language used by the program's own messages; `auto` means Chinese only when both UI language and console code page are Chinese |
+| `--show-env` | Probe and print OS / CPU / memory / media / file system / language plus the derived scan strategy, then exit; **no scan, no database writes** |
+| `--list-drives` | List local drives and exit |
+| `--list-skips` | List the recorded skip list and exit |
+| `--list-knowledge` | List the directory knowledge base and exit |
+| `--reset-db` | Wipe all records, returning to "never scanned" (interactive `y/N` confirmation; the `dir_knowledge` table is kept) |
+| `--dev` | Developer mode: extra diagnostics (environment details, incremental decisions, MFT estimates, engine probing, …); off by default |
+| `-h, --help` | Show help |
 
-### 常用示例
+### Examples
 
 ```bash
-# 扫描全部固定磁盘，扫完自动打开报告
+# Scan every fixed drive and open the report when done
 DiskGrowthMonitor.exe -d ALL --open
 
-# 只看 C 盘增长 500 MB 以上的目录，列前 50 条
+# Only C:, growth above 500 MB, top 50
 DiskGrowthMonitor.exe -d C -m 500 -t 50
 
-# 只监控两个业务目录（比全盘快得多）
+# Monitor just two business directories (far faster than a full scan)
 DiskGrowthMonitor.exe -r D:\Build -r D:\Data -m 10
 
-# 修好某个目录权限后，让它重新参与扫描
+# After fixing permissions on a directory, bring it back into scope
 DiskGrowthMonitor.exe -d C --reset-skips
 
-# 只想摘掉 C:\Windows 这棵大树，其他豁免照旧
+# Drop just the big C:\Windows tree, leaving every other exemption in place
 DiskGrowthMonitor.exe -d C -x C:\Windows
 
-# 关闭知识库豁免，扫描快回 20 秒左右（代价是系统目录又成盲区）
+# Turn the knowledge-base exemption off to get back to ~20 s scans
 DiskGrowthMonitor.exe -d C --no-knowledge-rescan
 
-# 排查「为什么选了这个枚举档位 / 并行度」（不扫描、不写库）
+# Diagnose "why this engine / parallelism" without scanning anything
 DiskGrowthMonitor.exe --show-env
 ```
 
 ---
 
-## 工作原理
+## How it works
 
-**单遍递归 + 自底向上累加。** 每个目录只枚举一次：遇到文件累加大小，遇到子目录递归取回子树统计后相加，返回时再写入本目录记录。每个文件系统条目**恰好访问一次**，避免了「逐目录各自求和」的 O(深度 × 文件数) 重复遍历。
+**Single-pass recursion with bottom-up accumulation.** Every directory is enumerated exactly once: file sizes are summed as they are seen, subdirectories are recursed into and their subtree totals added, and the directory's own row is written on the way back. Each file-system entry is therefore visited **exactly once**, avoiding the O(depth × file count) blow-up of summing each directory independently.
 
-**标识随目录项直接返回，去重不再逐文件开句柄。** 硬链接去重的钥匙是文件的唯一标识 `(卷, 文件标识)`。默认的 NT 枚举路径（`extd` / `both`）在返回目录项的同时就带上了文件标识，因此去重只剩一次哈希插入；只有 `win32` 兼容档才需要为每个非空文件额外开一次句柄。去重集合按**卷序列号**隔离（同一物理卷可挂多个盘符，按盘符分组会漏去重），卷内再分片加锁。
+**File IDs come back with the directory entry, so deduplication no longer opens a handle per file.** Hard-link deduplication keys on `(volume, file ID)`. The default NT enumeration path (`extd` / `both`) returns that ID alongside each entry, so deduplication costs a single hash insert; only the `win32` fallback engine needs an extra handle per non-empty file. The dedup set is isolated per **volume serial number** (one physical volume can carry several drive letters, and grouping by letter would silently miss duplicates), then sharded with per-shard locks.
 
-**两阶段提交，崩溃不丢基准。** 扫描前把待重扫根的上一版快照复制到 `dir_snapshots_prev`，扫描结果全部写入 stage 临时表，扫描结束后在**单个事务**内完成删除旧数据、迁入、写批次、落增长历史。因此扫描期间当前快照全程不动，中途崩溃或断电仍保留上一轮完整基准，下次运行依然能正确对比。
+**Two-phase commit, so a crash never costs you the baseline.** Before scanning, the previous snapshot of each affected root is copied into `dir_snapshots_prev`; results go into a stage table during the scan; and afterwards a **single transaction** deletes the old rows, moves the staged data in, records the batch and writes growth history. The live snapshot is untouched for the whole scan, so a crash or power loss still leaves the previous baseline intact and the next run can compare correctly.
 
-**对比在 SQL 内完成。** 结果先物化为临时表并建索引，再基于该表排序取 Top，**不把百万行数据拉进内存**；增长量 = 本次 − 上次，上次为 0 或不存在则标记为「新增」。
+**Comparison runs inside SQL.** Results are materialised into a temp table, indexed, and then sorted for each leaderboard — **millions of rows are never pulled into managed memory**. Growth is `current − previous`; a zero or missing previous value is reported as "new".
 
-**不跟随重解析点。** `C:\Users\All Users`、`C:\Documents and Settings` 等 junction 默认不递归进入（跟随会把同一棵子树重复计数 2 ~ 3 次），并记录到跳过清单。
+**Reparse points are not followed.** Junctions such as `C:\Users\All Users` and `C:\Documents and Settings` are not recursed into by default (following them would count the same subtree two or three times), and they are recorded in the skip list.
 
-**跳过清单与知识库豁免。** 五类跳过原因（默认排除 / 用户 `-x` 排除 / 权限不足 / IO 错误 / 不跟随的符号链接）全部记录到 `skip_paths`；其中权限不足与 IO 错误下次**直接跳过**，不再重复触发异常。但只要目录**命中知识库**（自身或祖先链上有已知目录），它就会被放行并**每轮重新尝试** —— 这正是为了打破「历史权限记录把系统目录永久挡在门外」形成的盲区。因此 `C:\Windows` 全树（其中 `C:\Windows\Installer` 一项即 159.8 GB）也会进入统计，代价是每轮多花约 45 秒（可用 `-x C:\Windows` 单独摘掉）。
+**Skip list and knowledge-base exemption.** All five skip reasons (default exclusion / user `-x` exclusion / access denied / I/O error / unfollowed symlink) are recorded in `skip_paths`. Access-denied and I/O-error entries are **skipped outright** next run instead of re-raising exceptions. But if a directory **matches the knowledge base** — itself or via an ancestor — it is let through and **retried every run**. That is precisely what breaks the blind spot created by stale permission records; the full `C:\Windows` tree (of which `C:\Windows\Installer` alone is 159.8 GB) becomes visible again, at a cost of roughly 45 extra seconds per run (narrow it with `-x C:\Windows` if you prefer).
 
-**进度显示。** 每个扫描根固定占 2 行（进度条 + 当前路径），末尾 1 行总计，用光标绝对定位原地重绘，全程不滚动、不刷屏；输出被重定向时自动静默。百分比分母优先取上一轮快照的目录数；首次扫描且非管理员时退化为「已扫字节 / 卷已用空间」的近似值（带 `~`）或只显示已扫量。
+**Progress display.** Each scan root occupies two lines (progress bar and current path) plus one total line at the end, redrawn in place with absolute cursor positioning — no scrolling, no flicker — and it goes silent automatically when output is redirected. The percentage denominator prefers the previous snapshot's directory count; on a first unelevated run it degrades to "bytes scanned / volume used space" (marked `~`) or shows only the scanned amount.
 
 ---
 
-## 环境与自适应策略
+## Environment and adaptive strategy
 
-目标是**三档异构**的 Windows：Windows Server 2012（NT 6.2，能力下限基准）、Windows 10、Windows 11 —— 写死一套参数只会取三者交集。因此程序启动时先探测环境，再决定**枚举引擎、并行度、是否启用去重**：
+The target is **three heterogeneous tiers** of Windows: Server 2012 (NT 6.2, the capability floor), Windows 10 and Windows 11. Hard-coding one parameter set would collapse to their intersection, so the program probes first and decides the **enumeration engine, parallelism and dedup strategy** from the result:
 
 ```bash
-DiskGrowthMonitor.exe --show-env      # 只探测并打印，不扫描、不写库
+DiskGrowthMonitor.exe --show-env      # probe and print only; no scan, no database writes
 ```
 
-| 探测输入 | 推导出的策略 |
+| Probe input | Derived strategy |
 |---|---|
-| OS 版本（走 `RtlGetVersion`，不用会被兼容性清单谎报的 `GetVersionExW`） | ≥ 6.2 启用 NT 枚举候选，按卷实测降级；更老直接用 Win32 枚举 |
-| 介质类型（SSD / HDD，由卷 → 物理磁盘号映射得出） | 固态：并行候选 `{物理核/2, 物理核, 物理核+4, 逻辑核}`；机械：`{1, 2, 3, 4}`（随机寻道代价高） |
-| 介质未知（非管理员） | 收窄为 `{1, 物理核}`，其余交给实测 |
-| 卷是否支持硬链接 | 全部不支持（FAT32/exFAT）则整体关闭去重，省掉逐文件开销 |
+| OS version (via `RtlGetVersion`, not `GetVersionExW`, which shims lie through) | ≥ 6.2 enables NT enumeration candidates and measures a fallback chain per volume; older uses Win32 enumeration directly |
+| Media type (SSD / HDD, derived from the volume → physical disk mapping) | SSD: candidates `{physical/2, physical, physical+4, logical}`; HDD: `{1, 2, 3, 4}` (high concurrency hurts when seeks are expensive) |
+| Media unknown (unelevated) | Narrowed to `{1, physical}`, letting measurements decide the rest |
+| Whether the volume supports hard links | If no volume does (FAT32/exFAT), deduplication is disabled entirely, saving a per-file handle |
 
-> 🔴 探测 OS 版本必须走 ntdll 的 `RtlGetVersion`：`Environment.OSVersion` / `GetVersionExW` 自 Windows 8.1 起会被「应用程序兼容性清单」劫持，未声明支持高版本时会**谎报成 6.2**。
+> 🔴 The OS version must come from ntdll's `RtlGetVersion`: since Windows 8.1, `Environment.OSVersion` and `GetVersionExW` are hijacked by the application-compatibility shim and **lie that the OS is 6.2** unless the process manifests support for newer versions.
 >
-> ⚠ **盘符与物理磁盘号没有必然对应关系**：多盘机（尤其 NVMe 与 SATA 混装）上系统盘完全可能是 `PhysicalDrive1/2/3`，猜 `C: == 0` 会拿错介质类型。程序问 `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` 由卷管理器直接回答。
+> ⚠ **Drive letters and physical disk numbers are unrelated.** On multi-disk machines (especially NVMe plus SATA), the system disk may well be `PhysicalDrive1/2/3`; assuming `C: == 0` would pick the wrong media type. The program asks `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, letting the volume manager answer directly.
 >
-> 「介质未知」与「介质是机械盘」是两件事，代码里用 `bool?` 严格区分（`null` = 未知）；把探测失败当成「非固态」，会让 16 线程的 NVMe 机器按单线程跑。
+> "Media unknown" and "media is a mechanical disk" are different things, distinguished in code by `bool?` (`null` = unknown). Treating a failed probe as "not an SSD" would run a 16-thread NVMe machine single-threaded.
 
 ---
 
-## HTML 报告
+## HTML report
 
-报告为**自包含单文件**（内联 CSS/JS，无外部依赖，可离线打开、可直接发送），采用浅色主题。
+The report is a **self-contained single file** (inlined CSS/JS, no external dependencies, opens offline, safe to forward) with a light theme.
 
-- **概览**：KPI 卡片（总占用、相比上次变化、目录数、文件数、耗时、跳过项）、变化规模（增大 / 减小 / 新增 / 消失）、本次扫描配置
-- **可安全清理的目录**：命中知识库且可清理性为「安全」的目录清单与合计
-- **各扫描根对比**：本次 / 上次占用、变化量与变化率、目录与文件数、卷容量与剩余空间，以及**卷已用 vs 本次统计的差额**及其结构性原因
-- **增长最快 / 缩减最多的目录** Top N：变化量、变化率、当前与上次占用、文件数变化、相对幅度条形图
-- **新增 / 消失目录**（按占用降序）
-- **完整明细表**：支持**路径关键字搜索**、**点击表头排序**、**按状态筛选**，以及「仅显示最深层级」开关（滤掉被父子关系重复计算的父目录，定位最细粒度增长点）
-- **跳过清单**：按原因分组折叠展示，标注哪些下次会自动跳过、哪些每轮重试
-- **已知目录的用途备注**：命中知识库的路径下方追加一行小字（`▸ Chrome 网页缓存 · 可安全清理`），三档配色区分可清理性，鼠标悬停看完整说明；**不新增列**、不引起横向滚动
+- **Overview**: KPI cards (total usage, change vs. last run, directories, files, elapsed time, skipped), change scale (grown / shrunk / new / removed) and the configuration used for this scan
+- **Safe-to-clean directories**: matching knowledge-base entries whose cleanability is *safe*, with a total
+- **Per scan root**: current vs. previous usage, delta and rate, directory/file counts, volume capacity and free space, plus the **volume-used vs. measured gap** and its structural causes
+- **Top N fastest growing / most shrinking**: delta, rate, current and previous usage, file-count change, relative magnitude bar
+- **New / removed directories**, sorted by size
+- **Full detail table**: path keyword search, click-to-sort headers, status filtering, and a "deepest level only" toggle that hides parents already accounted for by their children
+- **Skip list**: grouped and collapsible by reason, marking which entries will be skipped automatically next time and which are retried every run
+- **Annotations for known directories**: rows matching the knowledge base get a small caption underneath (`▸ Chrome web cache · safe to delete`), colour-coded by cleanability, with the full explanation on hover — **no extra columns**, no horizontal scrolling
 
-> 榜单里同时出现父目录与子目录是**正常的**：父目录的数字已经包含子目录。目录级变化天然重叠，这是数据本身的性质，不是重复统计。
+> Seeing both a parent and its children in a leaderboard is **expected**: the parent's number already includes the children. Overlap between directory-level changes is a property of the data, not double counting.
 
 ---
 
-## 数据库结构
+## Database schema
 
-数据库固定为 `<exe 目录>\disk_growth.db`，可直接用任意 SQLite 工具查询。
+The database lives at `<exe directory>\disk_growth.db` and can be queried with any SQLite tool.
 
-| 表 | 用途 |
+| Table | Purpose |
 |---|---|
-| `scan_runs` | 每轮扫描汇总（时间、扫描根、文件/目录数、总字节、耗时、是否首次） |
-| `dir_snapshots` | **当前**目录快照，每个目录一行（路径、层级、子树字节数、文件数、目录数） |
-| `dir_snapshots_prev` | **上一轮**快照（仅本次待重扫的根），每轮扫描前重建 |
-| `growth_history` | 每轮进入报告的增长项，便于长期回溯 |
-| `skip_paths` | 跳过清单（五类原因 + 命中次数 + 首末出现批次） |
-| `dir_knowledge` | 目录用途知识库（配置数据，**不受 `--reset-db` 影响**；内置 66 条，中英双语字段） |
+| `scan_runs` | Per-run summary (time, roots, file/directory counts, total bytes, elapsed, first-run flag) |
+| `dir_snapshots` | **Current** directory snapshot, one row per directory (path, depth, subtree bytes, file and directory counts) |
+| `dir_snapshots_prev` | **Previous** snapshot, for the roots being rescanned; rebuilt before each scan |
+| `growth_history` | Growth entries that made it into a report, for long-term lookback |
+| `skip_paths` | Skip list (five reasons, hit counts, first and last batch seen) |
+| `dir_knowledge` | Directory knowledge base (configuration data, **unaffected by `--reset-db`**; 66 built-in entries with bilingual fields) |
 
-每个目录一行的值均为**子树累计**（含全部后代），`depth = 0` 的行即扫描根本身。
-
----
-
-## 常见问题
-
-**Q：为什么各盘总占用比系统「已用空间」小？**
-A：先看是否为**结构性差额**（2% ~ 4%，MFT 保留区 / 元数据 / 簇对齐，属正常）；若差额明显偏大，多数是**权限不足**导致少算，用 `--list-skips` 查看，并以管理员身份重跑。以管理员运行后若仍有历史权限记录残留，加 `--reset-skips`。
-
-**Q：增长榜顶部为什么父目录和子目录都出现？**
-A：目录级变化天然重叠，父目录已包含子目录。勾选明细表的「仅显示最深层级」可只看最细粒度增长点。
-
-**Q：为什么第二次运行明显更快？**
-A：两层原因：① 元数据已进系统缓存；② 若本轮无变更，扫描根会基于 USN 变更日志**整根复用上一轮快照**，端到端可到秒级。怀疑数字不对时用 `--full` 强制全量。
-
-**Q：某个目录一直不参与扫描怎么办？**
-A：用 `--list-skips` 确认原因。若该目录命中知识库，程序**每轮都会自动重试**，无需干预；否则修好权限后加 `--reset-skips` 重新纳入。
-
-**Q：首次扫描为什么百分比带 `~` 或显示 `--%`？**
-A：百分比需要一个「目录总数」作分母。管理员运行时程序会枚举 NTFS MFT 精确统计（约 1 ~ 3 秒）；普通权限下不能做，整卷根退化为「已扫字节 / 卷已用空间」的近似值（带 `~`），子目录根只显示已扫量。**第二次运行起自动使用上一轮快照的目录数，百分比精确且零额外开销。**
-
-**Q：为什么一次扫描要 1 分钟左右？**
-A：这是「知识库豁免」的代价，换来的是系统目录不再是盲区。开启豁免时程序会进入 `C:\Windows` 全树（约 13 万个目录），`-d C` 约 65 s。三种选择：① 接受（默认）；② `--no-knowledge-rescan` 整体关掉，回到约 20 s；③ `-x C:\Windows` 只摘掉这一棵大树，其他豁免照旧。
-
-**Q：能只监控几个目录吗？**
-A：可以。`-r D:\Build -r D:\Data`，比全盘扫描快得多。
-
-**Q：数据库能换位置吗？**
-A：不能，固定为 `<exe 目录>\disk_growth.db`。若确实需要换盘，可把该目录用 junction 指向其他盘（C 盘剩余空间很小时，百万目录的 WAL 有撑爆风险）；报告位置可用 `-o` 任意指定。
+Every value is a **subtree total** including all descendants; the row with `depth = 0` is the scan root itself.
 
 ---
 
-## 项目结构
+## FAQ
+
+**Q: Why is the total smaller than the "used space" Windows reports?**
+A: First rule out the two causes. A **structural gap** of 2–4% is expected: the program sums logical file sizes after hard-link deduplication, while the OS reports allocated clusters (MFT reserved area, metadata, cluster rounding). A much larger gap usually means **permissions**; check with `--list-skips` and re-run elevated. If stale permission records linger after elevating, add `--reset-skips`.
+
+**Q: Why do both parents and children show up at the top of the growth list?**
+A: Directory-level changes inherently overlap — a parent already contains its children. Tick "deepest level only" in the detail table to see only the finest-grained growth.
+
+**Q: Why is the second run so much faster?**
+A: Two reasons: metadata is now in the system cache; and if nothing changed, the scan root is **reused wholesale** based on the USN change journal, finishing in seconds. Add `--full` to force a full scan if you suspect the numbers.
+
+**Q: A directory never appears in the report. Why?**
+A: Run `--list-skips` to check. If it matches the knowledge base it is retried automatically every run and needs no intervention; otherwise fix the permissions and add `--reset-skips`.
+
+**Q: Why is the first run's percentage marked `~` or shown as `--%`?**
+A: A percentage needs a directory count as denominator. Elevated, the program enumerates the NTFS MFT to count directories precisely (~1–3 s); unelevated it cannot, so a whole-volume root falls back to "bytes scanned / volume used" (marked `~`) and a subdirectory root shows only the scanned amount. **From the second run on, the previous snapshot's count is used — exact, and free.**
+
+**Q: Why does a scan take around a minute?**
+A: That is the cost of the knowledge-base exemption, and what it buys is visibility into system directories. With the exemption on, the whole `C:\Windows` tree (about 130k directories) is scanned and `-d C` takes about 65 s. Three options: ① accept it (default); ② `--no-knowledge-rescan` to get back to about 20 s; ③ `-x C:\Windows` to drop just that tree while keeping every other exemption.
+
+**Q: Can I monitor only a few directories?**
+A: Yes: `-r D:\Build -r D:\Data` is far faster than a full scan.
+
+**Q: If the scan scope changes (say `-d c,d`, then `-d c`, then back), do I lose the baselines?**
+A: No. Snapshots rotate per scan root: each root's baseline is **its own latest scan**, so comparison picks up where that root left off even after a few rounds of not being scanned. The report honestly labels this as "compared with this root's own last scan (run #N)"; a newly added root is labeled "first record". The only cost is that roots left out of a run keep their snapshot rows (use `--reset` to release them).
+
+**Q: Can the database live somewhere else?**
+A: No — it is fixed at `<exe directory>\disk_growth.db`. If you really need another volume, point the folder at it with a junction (a WAL for millions of directories can fill a nearly-full C:); the report path remains free via `-o`.
+
+---
+
+## Project layout
 
 ```
 DiskGrowthMonitor/
-├── DiskGrowthMonitor.csproj        # 单目标 net45 / x64；SQLite 互操作库只发 x64
-├── app.config                      # 运行时配置（supportedRuntime、GC 模式）
-├── Program.cs                      # 入口：参数解析、提权自举、环境探测、流程编排、控制台输出
+├── DiskGrowthMonitor.csproj        # single target net45 / x64; ships only the x64 SQLite interop
+├── app.config                      # runtime config (supportedRuntime, GC mode)
+├── Program.cs                      # entry: arg parsing, elevation, env probe, orchestration, console output
 ├── Cli/
-│   └── Options.cs                  # 命令行参数定义与解析、中英双语帮助
-├── Compat/                         # net45 兼容层（BCL 缺失类型与 API 的等价实现）
-│   ├── GlobalAliases.cs            #   SyncLock 全局别名
+│   └── Options.cs                  # option definitions, parsing and bilingual help
+├── Compat/                         # net45 compatibility shims for missing BCL types and APIs
+│   ├── GlobalAliases.cs            #   SyncLock global alias
 │   ├── PlatformCompat.cs           #   TickCount64 / Clamp / PtrToStructure<T>
-│   └── NetFxPolyfill.cs            #   编译器必需但 net45 缺失的类型
+│   └── NetFxPolyfill.cs            #   types the compiler needs that net45 lacks
 ├── Models/
-│   ├── ScanRoot.cs                 # 扫描根（盘符或自定义目录）
+│   ├── ScanRoot.cs                 # scan root (drive letter or custom directory)
 │   ├── Snapshots.cs                # DirSnapshot / ScanRun / ScanStatistics
-│   ├── GrowthItem.cs               # 对比结果项与状态枚举
-│   ├── SkipRecord.cs               # 跳过记录与原因分类
-│   ├── ScanSettings.cs             # 扫描器行为配置
-│   ├── ReportModel.cs              # 报告数据模型
-│   ├── SystemProfile.cs            # 环境探测结果与推导出的策略
-│   ├── VolumeGap.cs                # 「卷已用 vs 本次统计」差额口径
-│   ├── DirKnowledge.cs             # 知识库条目（中英双语字段 + 回退选取）
-│   ├── CleanableDir.cs             # 「可安全清理」聚合项
-│   ├── EnumEngine.cs               # 枚举引擎档位
-│   ├── LanguageInfo.cs             # 语言探测结果
-│   └── OutputLanguage.cs           # 输出语言枚举
+│   ├── GrowthItem.cs               # comparison result and status enum
+│   ├── SkipRecord.cs               # skip record and reason classification
+│   ├── ScanSettings.cs             # scanner configuration
+│   ├── ReportModel.cs              # report data model
+│   ├── SystemProfile.cs            # probe result and derived strategy
+│   ├── VolumeGap.cs                # volume-used vs. measured accounting
+│   ├── DirKnowledge.cs             # knowledge-base entry (bilingual fields + fallback)
+│   ├── CleanableDir.cs             # safe-to-clean aggregate
+│   ├── EnumEngine.cs               # enumeration engine tiers
+│   ├── LanguageInfo.cs             # language probe result
+│   └── OutputLanguage.cs           # output language enum
 ├── Native/
-│   ├── DirectoryEnumerator.cs      # Win32 枚举：FindFirstFileExW（自带 \\?\ 长路径支持）
-│   ├── NtDirectoryEnumerator.cs    # NT 枚举：NtQueryDirectoryFile（目录项直出文件标识）
-│   ├── FileSystemNative.cs         # 文件标识、卷硬链接能力、真实卷路径解析
-│   └── SystemNative.cs             # RtlGetVersion 真版本、物理核数、内存、SSD/HDD 介质
+│   ├── DirectoryEnumerator.cs      # Win32 enumeration: FindFirstFileExW (with \\?\ long-path support)
+│   ├── NtDirectoryEnumerator.cs    # NT enumeration: NtQueryDirectoryFile (IDs straight from entries)
+│   ├── FileSystemNative.cs         # file IDs, volume hard-link capability, real volume path
+│   └── SystemNative.cs             # RtlGetVersion, physical cores, memory, SSD/HDD media
 ├── Services/
-│   ├── DiskScanner.cs              # 单遍递归扫描 + 后序累加 + 分根并行
-│   ├── EnumEngineSelector.cs       # 按卷运行时实测选择枚举档位并缓存
-│   ├── FileIdSet.cs                # 文件标识去重集合（卷序列号隔离 + 分片锁）
-│   ├── SkipListService.cs          # 排除规则与持久化跳过判定
-│   ├── KnowledgeService.cs         # 知识库匹配（后缀对齐 + 祖先片段索引）
-│   ├── KnowledgeSeed.cs            # 66 条内置知识库条目（中英双语）
-│   ├── CleanupAdvisor.cs           # 「可安全清理」聚合
-│   ├── DatabaseService.cs          # 建表 / 迁移 / 临时表 / 两阶段快照轮换
-│   ├── StageWriter.cs              # 扫描结果异步批量入库（带背压）
-│   ├── GrowthAnalyzer.cs           # SQL 内两次快照对比与榜单查询
-│   ├── ReportBuilder.cs            # 自包含 HTML 报告（双语）
-│   ├── ConsoleProgressDisplay.cs   # 原地重绘的多行进度块
-│   ├── VolumeDirEstimator.cs       # MFT 精确统计目录总数（进度分母）
-│   ├── UsnJournalService.cs        # USN 增量变更检测与整根复用
-│   ├── EnvironmentProbe.cs         # 运行环境探测与策略推导
-│   └── LanguageProbe.cs            # 语言判定与控制台代码页恢复
+│   ├── DiskScanner.cs              # single-pass recursion, post-order accumulation, per-root parallelism
+│   ├── EnumEngineSelector.cs       # per-volume runtime engine selection with caching
+│   ├── FileIdSet.cs                # dedup set (volume-serial isolation + sharded locks)
+│   ├── SkipListService.cs          # exclusion rules and persistent skip decisions
+│   ├── KnowledgeService.cs         # knowledge-base matching (suffix alignment + ancestor index)
+│   ├── KnowledgeSeed.cs            # 66 built-in knowledge-base entries (bilingual)
+│   ├── CleanupAdvisor.cs           # safe-to-clean aggregation
+│   ├── DatabaseService.cs          # schema, migration, stage tables, two-phase snapshot rotation
+│   ├── StageWriter.cs              # asynchronous batched persistence with backpressure
+│   ├── GrowthAnalyzer.cs           # in-SQL snapshot comparison and leaderboards
+│   ├── ReportBuilder.cs            # self-contained bilingual HTML report
+│   ├── ConsoleProgressDisplay.cs   # in-place redrawn multi-line progress block
+│   ├── VolumeDirEstimator.cs       # MFT directory count (progress denominator)
+│   ├── UsnJournalService.cs        # USN change detection and whole-root reuse
+│   ├── EnvironmentProbe.cs         # environment probing and strategy derivation
+│   └── LanguageProbe.cs            # language decision and console code-page restore
 └── Util/
-    ├── FormatUtil.cs               # 格式化、显示宽度对齐、HTML 转义
-    ├── Lang.cs                     # 内联双语文本 T(zh, en) / F(zh, en, args)
-    ├── ElevationHelper.cs          # UAC 自举（重启自身 + 退出码透传 + 取消时降级）
-    ├── ConsoleAttach.cs            # 提权子进程接管父窗口控制台
-    └── ConsoleWindow.cs            # 控制台窗口操作
+    ├── FormatUtil.cs               # formatting, display-width alignment, HTML escaping
+    ├── Lang.cs                     # inline bilingual strings T(zh, en) / F(zh, en, args)
+    ├── ElevationHelper.cs          # UAC self-elevation (restart, exit-code relay, graceful decline)
+    ├── ConsoleAttach.cs            # elevated child attaches to the parent's console
+    └── ConsoleWindow.cs            # console window helpers
 ```
 
 ---
 
-## 技术选型
+## Technology choices
 
-| 项 | 选择 | 理由 |
+| Item | Choice | Rationale |
 |---|---|---|
-| 目标框架 | `net45` | Windows 7 SP1 / Server 2012 以上全部自带 .NET Framework 4.5+，目标机**零前置安装** |
-| 进程位数 | `x64` + `Prefer32Bit=false` | 32 位进程仅 2 GB 用户态地址空间，全盘百万级目录的扫描字典会吃满；固定 x64 后只需分发 `x64\SQLite.Interop.dll` |
-| SQLite 驱动 | `System.Data.SQLite.Core` 1.0.118 | SQLite 官方 ADO.NET 提供方，包内自带 `net45` 与互操作库；原生库零 UCRT / 零 VC 运行库依赖 |
-| 对比计算位置 | SQLite 内（临时表 + 索引） | 内存占用与目录总数解耦，百万级目录不爆内存 |
-| 报告 | 自包含 HTML（内联 CSS/JS） | 无外部依赖、可离线打开、可直接发送 |
-| 枚举接口 | `NtQueryDirectoryFile` 优先，`FindFirstFileExW` 兜底 | 前者目录项直出文件标识，去掉占大头的逐文件句柄调用；后者在任何 Windows 上都可用 |
+| Target framework | `net45` | Windows 7 SP1 / Server 2012 and later all include .NET Framework 4.5+, so target machines need **zero prerequisites** |
+| Bitness | `x64` + `Prefer32Bit=false` | A 32-bit process has only 2 GB of user address space, which a million-directory scan dictionary exhausts; fixing x64 also means shipping only `x64\SQLite.Interop.dll` |
+| SQLite driver | `System.Data.SQLite.Core` 1.0.118 | SQLite's own ADO.NET provider, shipping both a `net45` assembly and the native library; the native side has zero UCRT / VC runtime dependencies |
+| Where comparison runs | Inside SQLite (temp table + index) | Memory use is decoupled from directory count; millions of directories will not exhaust RAM |
+| Report | Self-contained HTML (inlined CSS/JS) | No dependencies, opens offline, safe to forward |
+| Enumeration API | `NtQueryDirectoryFile` first, `FindFirstFileExW` as fallback | The former returns file IDs with directory entries, removing the dominant per-file handle cost; the latter works on any Windows |
 
 ---
 
-## 报告内容
+## Report contents
 
-本仓库只提供源码，不附带样例报告——报告数字与本机目录强相关。跑两轮即可得到对比报告，其固定构成如下：
+This repository ships source only and no sample reports, since report figures are specific to the machine that produced them. Two runs give you a comparison report; its fixed structure is:
 
-| 区块 | 首次运行 | 此后每轮 |
+| Section | First run | Every run after |
 |---|---|---|
-| 概览 | 统计口径、目录数与文件数、总占用 | 相较上一轮的变化量与变化率、增长/缩减目录数 |
-| 占用最大的目录 | 按占用排序的 Top 30 | 同左 |
-| 增长榜 / 缩减榜 | 不显示（无对比基准） | 按变化量排序；无目录达到阈值时降级为「变化量最大的 30 个」并在页面上标注 |
-| 明细表 | 全部目录，可按状态筛选、按任意列排序 | 同左 |
-| 清理建议 | 命中知识库的目录附用途说明与安全等级 | 同左 |
-| 跳过清单 | 默认排除 / `-x` 排除 / 权限不足 / IO 错误 / 符号链接 五类 | 同左 |
-| 卷容量对照 | 统计总量与卷已用的差额，≥1% 时给出定性原因 | 同左 |
+| Overview | accounting basis, directory and file counts, total usage | change vs. the previous round (bytes and percent), grown / shrunk counts |
+| Largest directories | Top 30 by usage | same |
+| Growth / shrink leaderboards | not shown (no baseline) | ranked by change; when nothing crosses the threshold the report falls back to the 30 largest movers and says so on the page |
+| Detail table | every directory; filter by status, sort by any column | same |
+| Cleanup advice | knowledge-base matches annotated with purpose and safety level | same |
+| Skip list | default exclusion / `-x` exclusion / access denied / I/O error / symbolic link | same |
+| Volume reconciliation | scanned total vs. volume used; qualitative reasons when the gap is ≥1% | same |
 
-报告为单个自包含 HTML（内联 CSS/JS，无外部依赖），可离线打开与转发；界面语言随程序语言自动切换。
-
----
-
-## 相关文档
-
-- [`使用说明.md`](使用说明.md) —— 面向使用者的操作手册（准备、运行、报告怎么看、参数速查、常见问题）
-- [`README_EN.md`](README_EN.md) —— 本文档的英文版
-- [`UserGuide_EN.md`](UserGuide_EN.md) —— 英文版操作手册
+The report is a single self-contained HTML file (inlined CSS/JS, no external dependencies) that opens offline and can be forwarded; its UI language follows the program's language.
 
 ---
 
-## 许可证
+## Related documents
 
-MIT License，版权归 **Winrichxue** <winrichxue@126.com>。详见 [`LICENSE`](LICENSE)。
+- [`README_zh.md`](README_zh.md) — this document in Simplified Chinese
+- [`UserGuide_EN.md`](UserGuide_EN.md) — end-user manual (setup, running, reading the report, full option list, troubleshooting)
+- [`使用说明.md`](使用说明.md) — the same manual in Simplified Chinese
+
+---
+
+## License
+
+MIT License, Copyright (c) **Winrichxue** <winrichxue@126.com>. See [`LICENSE`](LICENSE).
