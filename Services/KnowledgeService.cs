@@ -274,6 +274,15 @@ public sealed class KnowledgeService
         hits += Annotate(a.NewTop);
         hits += Annotate(a.RemovedTop);
         hits += Annotate(a.Detail);
+        // 按根拆分的数据（报告按盘 tab 展示）也需要标注，否则每盘 tab 内看不到知识库用途小字
+        foreach (var pr in a.PerRoot)
+        {
+            hits += Annotate(pr.GrowthTop);
+            hits += Annotate(pr.ShrinkTop);
+            hits += Annotate(pr.NewTop);
+            hits += Annotate(pr.RemovedTop);
+            hits += Annotate(pr.Detail);
+        }
         return hits;
     }
 }

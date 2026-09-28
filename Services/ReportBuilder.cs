@@ -77,42 +77,7 @@ public static class ReportBuilder
         AppendOverview(sb, m);
         AppendRootTable(sb, m);
         AppendVolumeGapSection(sb, m);
-
-        if (m.IsFirstRun)
-        {
-            // 首次运行没有对比基准，任何「增长」都是伪命题。
-            // 此时改为展示「占用最大的目录」，这才是用户首次使用时真正需要的信息。
-            AppendLargest(sb, m);
-        }
-        else
-        {
-            // 阈值过滤后为空时，分析器已自动降级为「未应用阈值」的 Top N，此处据实标注
-            string? growthNotice = m.Analysis.GrowthFallbackUsed
-                ? Lang.T("本轮没有任何目录的增长量达到 ", "No directory grew by as much as ")
-                  + FormatUtil.Html(FormatUtil.MbThreshold(m.MinBytes))
-                  + (m.MinPercent > 0
-                      ? Lang.T(" 且增长百分比达到 ", " with a growth percentage of at least ")
-                        + FormatUtil.Html(FormatUtil.Percent(m.MinPercent))
-                      : string.Empty)
-                  + Lang.T("，以下为<strong>未应用阈值</strong>时变化量最大的目录。",
-                           "; the table below shows the largest changes with <strong>no threshold applied</strong>.")
-                : null;
-
-            AppendRankSection(sb, m, "growth",
-                Lang.T("增长最快的目录", "Fastest growing directories"),
-                Lang.T("按目录自身子树占用变化量降序排列", "Sorted by the size change of each directory's own subtree, descending"),
-                m.Analysis.GrowthTop, "up", growthNotice);
-
-            AppendRankSection(sb, m, "shrink",
-                Lang.T("缩减最多的目录", "Most reduced directories"),
-                Lang.T("按目录自身子树占用变化量升序排列", "Sorted by the size change of each directory's own subtree, ascending"),
-                m.Analysis.ShrinkTop, "down", null,
-                m.Analysis.HasAnyShrink ? null : Lang.T("本轮没有任何目录体积减小。", "No directory shrank this run."));
-
-            AppendNewRemoved(sb, m);
-        }
-
-        AppendDetail(sb, m);
+        AppendRootBody(sb, m);
         AppendSkipSection(sb, m);
         AppendFooter(sb, m);
 
@@ -536,16 +501,100 @@ public static class ReportBuilder
         sb.Append("</section>\n");
     }
 
+    // ------------------------------------------------------------ 主体（按盘切换）
+
+    /// <summary>
+    /// 报告主体：先已在概览区给出多盘总体，这里再以单个扫描根为数据报主体。
+    /// 多盘（扫描根 &gt; 1）时生成 tab 栏，每盘一个 panel，切换查看各自榜单/明细；
+    /// 单盘时直接平铺，不出现 tab 栏（与历史单盘报告观感一致）。
+    /// </summary>
+    private static void AppendRootBody(StringBuilder sb, ReportModel m)
+    {
+        var perRoot = m.Analysis.PerRoot;
+        if (perRoot.Count == 0)
+        {
+            // 极端防御：理论上扫描至少有一个根，此分支不应走到
+            sb.Append("<section><div class=\"empty\">")
+              .Append(Lang.T("没有可展示的扫描根。", "No scan roots to show."))
+              .Append("</div></section>\n");
+            return;
+        }
+
+        bool multi = perRoot.Count > 1;
+
+        if (multi)
+        {
+            sb.Append("<div class=\"root-tabs\" id=\"rootTabs\">\n");
+            for (int i = 0; i < perRoot.Count; i++)
+            {
+                sb.Append("  <button type=\"button\" class=\"root-tab").Append(i == 0 ? " active" : "")
+                  .Append("\" data-tab=\"").Append(i).Append("\">")
+                  .Append(FormatUtil.Html(perRoot[i].DisplayName)).Append("</button>\n");
+            }
+            sb.Append("</div>\n");
+        }
+
+        for (int i = 0; i < perRoot.Count; i++)
+        {
+            var pr = perRoot[i];
+            string suffix = multi ? "-" + i : string.Empty;
+
+            if (multi)
+                sb.Append("<div class=\"root-panel").Append(i != 0 ? " is-hidden" : "")
+                  .Append("\" data-panel=\"").Append(i).Append("\">\n");
+
+            if (m.IsFirstRun)
+            {
+                // 首次运行没有对比基准，任何「增长」都是伪命题。
+                // 此时改为展示「占用最大的目录」，这才是用户首次使用时真正需要的信息。
+                AppendLargest(sb, m, pr, suffix);
+            }
+            else
+            {
+                // 阈值过滤后为空时，分析器已自动降级为「未应用阈值」的 Top N，此处据实标注
+                string? growthNotice = pr.GrowthFallbackUsed
+                    ? Lang.T("本轮没有任何目录的增长量达到 ", "No directory grew by as much as ")
+                      + FormatUtil.Html(FormatUtil.MbThreshold(m.MinBytes))
+                      + (m.MinPercent > 0
+                          ? Lang.T(" 且增长百分比达到 ", " with a growth percentage of at least ")
+                            + FormatUtil.Html(FormatUtil.Percent(m.MinPercent))
+                          : string.Empty)
+                      + Lang.T("，以下为<strong>未应用阈值</strong>时变化量最大的目录。",
+                               "; the table below shows the largest changes with <strong>no threshold applied</strong>.")
+                    : null;
+
+                AppendRankSection(sb, m, "growth" + suffix,
+                    Lang.T("增长最快的目录", "Fastest growing directories"),
+                    Lang.T("按目录自身子树占用变化量降序排列", "Sorted by the size change of each directory's own subtree, descending"),
+                    pr.GrowthTop, "up", growthNotice);
+
+                AppendRankSection(sb, m, "shrink" + suffix,
+                    Lang.T("缩减最多的目录", "Most reduced directories"),
+                    Lang.T("按目录自身子树占用变化量升序排列", "Sorted by the size change of each directory's own subtree, ascending"),
+                    pr.ShrinkTop, "down", null,
+                    pr.HasAnyShrink ? null : Lang.T("本轮没有任何目录体积减小。", "No directory shrank this run."));
+
+                AppendNewRemoved(sb, pr, suffix);
+            }
+
+            AppendDetail(sb, m, pr, suffix);
+
+            if (multi)
+                sb.Append("</div>\n");
+        }
+    }
+
     // ------------------------------------------------------------ 首次运行：最大目录
 
     /// <summary>
     /// 首次运行时没有对比基准，展示「占用最大的目录」替代增长榜。
-    /// 数据源复用 Analysis.NewTop —— 首次运行下它已按占用降序排列。
+    /// 数据源复用 <see cref="PerRootAnalysis.NewTop"/> —— 首次运行下它已按占用降序排列。
     /// </summary>
-    private static void AppendLargest(StringBuilder sb, ReportModel m)
+    private static void AppendLargest(StringBuilder sb, ReportModel m, PerRootAnalysis pr, string suffix)
     {
-        var items = m.Analysis.NewTop;
-        sb.Append("<section id=\"largest\">\n<h2>").Append(Lang.T("占用最大的目录", "Largest directories")).Append("</h2>\n");
+        var items = pr.NewTop;
+        sb.Append("<section id=\"largest").Append(suffix).Append("\">\n<h2>")
+          .Append(Lang.T("占用最大的目录", "Largest directories")).Append("</h2>\n");
         sb.Append("<p class=\"section-desc\">")
           .Append(Lang.T("首次运行尚无对比基准，此处按目录占用降序展示，",
                          "There is no comparison baseline on the first run, so directories are listed by size, descending, "))
@@ -654,10 +703,10 @@ public static class ReportBuilder
 
     // ------------------------------------------------------- 新增 / 消失目录
 
-    private static void AppendNewRemoved(StringBuilder sb, ReportModel m)
+    private static void AppendNewRemoved(StringBuilder sb, PerRootAnalysis pr, string suffix)
     {
-        var a = m.Analysis;
-        sb.Append("<section id=\"newremoved\">\n<h2>").Append(Lang.T("新增与消失的目录", "Added and removed directories")).Append("</h2>\n");
+        sb.Append("<section id=\"newremoved").Append(suffix).Append("\">\n<h2>")
+          .Append(Lang.T("新增与消失的目录", "Added and removed directories")).Append("</h2>\n");
         sb.Append("<p class=\"section-desc\">")
           .Append(Lang.T("新增 = 上一轮快照中不存在；消失 = 本轮不存在且未被主动跳过。",
                          "Added = absent from the previous snapshot; removed = absent now and not deliberately skipped."))
@@ -666,12 +715,12 @@ public static class ReportBuilder
         sb.Append("<div class=\"grid-2\">\n");
 
         sb.Append("<div class=\"panel\">\n<h3>").Append(Lang.T("新增目录", "Added directories"));
-        if (a.NewTop.Count > 0)
+        if (pr.NewTop.Count > 0)
             sb.Append(Lang.F("（共 {0} 个，显示占用最大的前 {1} 个）",
                              " ({0} in total, showing the {1} largest)",
-                             FormatUtil.Count(a.Summary.NewCount), a.NewTop.Count));
+                             FormatUtil.Count(pr.Summary.NewCount), pr.NewTop.Count));
         sb.Append("</h3>\n");
-        if (a.NewTop.Count == 0)
+        if (pr.NewTop.Count == 0)
             sb.Append("<div class=\"empty\">").Append(Lang.T("无", "none")).Append("</div>\n");
         else
         {
@@ -679,7 +728,7 @@ public static class ReportBuilder
               .Append("</th><th class=\"num\">").Append(Lang.T("占用", "Size"))
               .Append("</th><th class=\"num\">").Append(Lang.T("文件数变化", "File count change"))
               .Append("</th></tr></thead>\n<tbody>\n");
-            foreach (var it in a.NewTop)
+            foreach (var it in pr.NewTop)
             {
                 sb.Append("  <tr><td class=\"mono wrap path\">");
                 AppendPathInner(sb, it);
@@ -691,12 +740,12 @@ public static class ReportBuilder
         sb.Append("</div>\n");
 
         sb.Append("<div class=\"panel\">\n<h3>").Append(Lang.T("消失目录", "Removed directories"));
-        if (a.RemovedTop.Count > 0)
+        if (pr.RemovedTop.Count > 0)
             sb.Append(Lang.F("（共 {0} 个，显示原占用最大的前 {1} 个）",
                              " ({0} in total, showing the {1} that were largest)",
-                             FormatUtil.Count(a.Summary.RemovedCount), a.RemovedTop.Count));
+                             FormatUtil.Count(pr.Summary.RemovedCount), pr.RemovedTop.Count));
         sb.Append("</h3>\n");
-        if (a.RemovedTop.Count == 0)
+        if (pr.RemovedTop.Count == 0)
             sb.Append("<div class=\"empty\">").Append(Lang.T("无", "none")).Append("</div>\n");
         else
         {
@@ -704,7 +753,7 @@ public static class ReportBuilder
               .Append("</th><th class=\"num\">").Append(Lang.T("原占用", "Previous size"))
               .Append("</th><th class=\"num\">").Append(Lang.T("文件数变化", "File count change"))
               .Append("</th></tr></thead>\n<tbody>\n");
-            foreach (var it in a.RemovedTop)
+            foreach (var it in pr.RemovedTop)
             {
                 sb.Append("  <tr><td class=\"mono wrap path\">");
                 AppendPathInner(sb, it);
@@ -718,10 +767,11 @@ public static class ReportBuilder
 
     // ------------------------------------------------------------ 详细明细表
 
-    private static void AppendDetail(StringBuilder sb, ReportModel m)
+    private static void AppendDetail(StringBuilder sb, ReportModel m, PerRootAnalysis pr, string suffix)
     {
-        var items = m.Analysis.Detail;
-        sb.Append("<section id=\"detail\">\n<h2>").Append(Lang.T("详细明细", "Details")).Append("</h2>\n");
+        var items = pr.Detail;
+        sb.Append("<section id=\"detail").Append(suffix).Append("\" class=\"detail-section\">\n<h2>")
+          .Append(Lang.T("详细明细", "Details")).Append("</h2>\n");
         if (m.IsFirstRun)
         {
             sb.Append("<p class=\"section-desc\">")
@@ -736,7 +786,7 @@ public static class ReportBuilder
         else
         {
             sb.Append("<p class=\"section-desc\">")
-              .Append(m.Analysis.DetailFallbackUsed
+              .Append(pr.DetailFallbackUsed
                   ? Lang.T("按变化量绝对值降序", "All directories, by absolute change, descending")
                   : Lang.F("所有变化量 ≥ {0} 的目录，按变化量绝对值降序",
                            "All directories with a change ≥ {0}, by absolute change, descending",
@@ -746,7 +796,7 @@ public static class ReportBuilder
                              FormatUtil.Count(m.DetailTop), FormatUtil.Count(items.Count)));
         }
 
-        if (m.Analysis.DetailFallbackUsed && items.Count > 0)
+        if (pr.DetailFallbackUsed && items.Count > 0)
         {
             sb.Append("<div class=\"notice notice-warn\">")
               .Append(Lang.F("本轮所有目录的变化量都低于 {0}，下表为<strong>未应用阈值</strong>时变化量最大的 {1} 个目录。",
@@ -764,24 +814,26 @@ public static class ReportBuilder
             return;
         }
 
+        // 明细表多实例：搜索框/状态按钮/复选框/计数都用 class 定位（JS 按 .detail-section 作用域查找），
+        // id 仅用于保证多盘时 HTML 内元素唯一（单盘 suffix 为空、保持与历史报告一致）。
         sb.Append("<div class=\"toolbar\">\n");
-        sb.Append("  <input id=\"dtSearch\" type=\"search\" placeholder=\"")
+        sb.Append("  <input type=\"search\" class=\"dt-search\" placeholder=\"")
           .Append(Lang.T("按路径关键字搜索…", "Search by path keyword…"))
           .Append("\" autocomplete=\"off\">\n");
-        sb.Append("  <div class=\"seg\" id=\"dtStatus\">\n");
-        sb.Append("    <button class=\"seg-btn active\" data-status=\"\">").Append(Lang.T("全部", "All")).Append("</button>\n");
+        sb.Append("  <div class=\"seg dt-status\">\n");
+        sb.Append("    <button type=\"button\" class=\"seg-btn active\" data-status=\"\">").Append(Lang.T("全部", "All")).Append("</button>\n");
         foreach (var st in StatusKeys)
-            sb.Append("    <button class=\"seg-btn\" data-status=\"").Append(st).Append("\">")
+            sb.Append("    <button type=\"button\" class=\"seg-btn\" data-status=\"").Append(st).Append("\">")
               .Append(FormatUtil.Html(StatusLabel(st))).Append("</button>\n");
         sb.Append("  </div>\n");
-        sb.Append("  <label class=\"chk\"><input id=\"dtLeafOnly\" type=\"checkbox\"> <span>")
+        sb.Append("  <label class=\"chk\"><input type=\"checkbox\" class=\"dt-leaf\"> <span>")
           .Append(Lang.T("仅显示最深层级（隐藏已被下层级覆盖的父目录）",
                          "Deepest level only (hide parents covered by a deeper entry)"))
           .Append("</span></label>\n");
-        sb.Append("  <span class=\"toolbar-info\" id=\"dtCount\"></span>\n");
+        sb.Append("  <span class=\"toolbar-info dt-count\"></span>\n");
         sb.Append("</div>\n");
 
-        sb.Append("<div class=\"table-wrap\">\n<table class=\"data sortable\" id=\"dtTable\">\n<thead>\n<tr>");
+        sb.Append("<div class=\"table-wrap\">\n<table class=\"data sortable\" id=\"dtTable").Append(suffix).Append("\">\n<thead>\n<tr>");
         sb.Append("<th data-key=\"status\">").Append(Lang.T("状态", "Status")).Append("</th>");
         sb.Append("<th data-key=\"delta\" class=\"num sorted-desc\">").Append(Lang.T("变化量", "Change")).Append("</th>");
         sb.Append("<th data-key=\"pct\" class=\"num\">").Append(Lang.T("变化率", "Change %")).Append("</th>");
@@ -790,7 +842,7 @@ public static class ReportBuilder
         sb.Append("<th data-key=\"fdelta\" class=\"num\">").Append(Lang.T("文件数变化", "File count change")).Append("</th>");
         sb.Append("<th data-key=\"depth\" class=\"num\">").Append(Lang.T("层级", "Depth")).Append("</th>");
         sb.Append("<th data-key=\"path\">").Append(Lang.T("路径", "Path")).Append("</th>");
-        sb.Append("</tr>\n</thead>\n<tbody id=\"dtBody\">\n");
+        sb.Append("</tr>\n</thead>\n<tbody class=\"dt-body\">\n");
 
         foreach (var it in items)
         {
@@ -1028,6 +1080,15 @@ public static class ReportBuilder
     h3{font-size:15px; margin:0 0 10px; font-weight:650}
     section{background:var(--card); border:1px solid var(--border); border-radius:10px;
       padding:20px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(16,24,40,.04)}
+    /* Per-root tab bar: switch between scan roots (multi-disk report body) */
+    .root-tabs{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px;
+      position:sticky; top:0; z-index:10; background:var(--bg); padding:10px 0}
+    .root-tab{border:1px solid var(--border-strong); background:var(--card); color:var(--muted);
+      padding:8px 16px; border-radius:8px; font-size:13.5px; font-weight:600; cursor:pointer;
+      font-family:inherit; transition:background .12s,color .12s,border-color .12s}
+    .root-tab:hover{background:#eef4fb; color:var(--accent)}
+    .root-tab.active{background:#e8f0fb; color:var(--accent); border-color:#8bb6e8; font-weight:650}
+    .root-panel.is-hidden{display:none}
     .page-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
       background:var(--card); border:1px solid var(--border); border-radius:10px;
       padding:20px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(16,24,40,.04)}
@@ -1068,7 +1129,7 @@ public static class ReportBuilder
     table.mini td.sub{color:var(--muted-2); font-size:12.5px}
 
     .table-wrap{overflow:auto; max-height:none; border:1px solid var(--border); border-radius:8px; background:var(--card)}
-    #detail .table-wrap{max-height:70vh}
+    .detail-section .table-wrap{max-height:70vh}
     .num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
     .rank{width:44px; text-align:right; color:var(--muted); font-variant-numeric:tabular-nums}
     .mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace; font-size:12.5px}
@@ -1152,13 +1213,33 @@ public static class ReportBuilder
     /// 内嵌脚本的模板。三处与语言相关的内容用占位符留白，由 <see cref="BuildJs"/> 注入：
     /// <c>__LOCALE__</c>（路径列比较用的区域设置）、<c>__SHOWING__</c> / <c>__ROWS__</c>（行数提示的前后缀）。
     /// 其余部分是纯逻辑，不含可见文本。
+    /// 明细表按 <c>.detail-section</c> 作用域多实例初始化（多盘时每个盘各一张表），
+    /// 根 tab 栏切换按 <c>.root-tab</c> / <c>.root-panel</c> 的 data 关联。
     /// </summary>
     private const string JsTemplate = """
     (function(){
-      // ---------- Detail table: sorting ----------
-      var table = document.getElementById('dtTable');
-      if (table) {
-        var body = document.getElementById('dtBody');
+      // ---------- Root tabs: switch between scan roots ----------
+      var tabs = document.querySelectorAll('.root-tab');
+      if (tabs.length) {
+        var panels = document.querySelectorAll('.root-panel');
+        tabs.forEach(function(tab){
+          tab.addEventListener('click', function(){
+            tabs.forEach(function(t){ t.classList.remove('active'); });
+            tab.classList.add('active');
+            var target = tab.getAttribute('data-tab');
+            panels.forEach(function(p){
+              p.classList.toggle('is-hidden', p.getAttribute('data-panel') !== target);
+            });
+          });
+        });
+      }
+
+      // ---------- Detail tables (one per scan root): sorting / search / filter ----------
+      var sections = document.querySelectorAll('.detail-section');
+      sections.forEach(function(section){
+        var table = section.querySelector('table.sortable');
+        if (!table) return;
+        var body = section.querySelector('tbody.dt-body');
         var ths = table.querySelectorAll('th[data-key]');
         var state = { key: 'delta', desc: true };
 
@@ -1188,10 +1269,10 @@ public static class ReportBuilder
         });
 
         // ---------- Detail table: search / status filter / collapse parents ----------
-        var searchBox = document.getElementById('dtSearch');
-        var leafOnly = document.getElementById('dtLeafOnly');
-        var countInfo = document.getElementById('dtCount');
-        var statusButtons = document.querySelectorAll('#dtStatus .seg-btn');
+        var searchBox = section.querySelector('input.dt-search');
+        var leafOnly = section.querySelector('input.dt-leaf');
+        var countInfo = section.querySelector('.dt-count');
+        var statusButtons = section.querySelectorAll('.dt-status .seg-btn');
         var currentStatus = '';
         var allRows = Array.prototype.slice.call(body.querySelectorAll('tr'));
 
@@ -1239,7 +1320,7 @@ public static class ReportBuilder
         if (leafOnly) leafOnly.addEventListener('change', applyFilter);
         window.__dtApply = applyFilter;
         applyFilter();
-      }
+      });
     })();
     """;
 

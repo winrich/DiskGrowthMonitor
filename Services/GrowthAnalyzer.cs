@@ -18,6 +18,29 @@ public sealed class ChangeSummary
     public long ComparedCount;
 }
 
+/// <summary>
+/// 单个扫描根的对比产出（榜单 / 新增消失 / 明细）。
+/// 与 <see cref="AnalysisResult"/> 的全局榜单不同，这里每个扫描根各一份，
+/// 供 HTML 报告按磁盘 tab 切换展示——避免多盘时各盘的目录混在同一张榜里。
+/// </summary>
+public sealed class PerRootAnalysis
+{
+    public required string RootKey { get; init; }
+    public required string DisplayName { get; init; }
+    public List<GrowthItem> GrowthTop { get; } = new();
+    public List<GrowthItem> ShrinkTop { get; } = new();
+    public List<GrowthItem> NewTop { get; } = new();
+    public List<GrowthItem> RemovedTop { get; } = new();
+    public List<GrowthItem> Detail { get; } = new();
+    public ChangeSummary Summary { get; } = new();
+    /// <summary>该根的增长榜在应用阈值后为空、已降级为「未应用阈值」。</summary>
+    public bool GrowthFallbackUsed { get; set; }
+    /// <summary>该根的详细明细在应用阈值后为空、已降级为「未应用阈值」。</summary>
+    public bool DetailFallbackUsed { get; set; }
+    /// <summary>该根是否存在任何体积减小的目录。</summary>
+    public bool HasAnyShrink { get; set; }
+}
+
 /// <summary>一次分析的全部产出。</summary>
 public sealed class AnalysisResult
 {
@@ -27,6 +50,8 @@ public sealed class AnalysisResult
     public List<GrowthItem> NewTop { get; } = new();
     public List<GrowthItem> RemovedTop { get; } = new();
     public List<GrowthItem> Detail { get; } = new();
+    /// <summary>按扫描根拆分的主体数据（报告按磁盘切换用），顺序与用户给定的扫描根一致。</summary>
+    public List<PerRootAnalysis> PerRoot { get; } = new();
     public ChangeSummary Summary { get; } = new();
     public bool IsFirstRun { get; set; }
     public DateTime? PrevScanTime { get; set; }
@@ -119,6 +144,39 @@ public sealed class GrowthAnalyzer
                 result.DetailFallbackUsed = detail.Count > 0;
             }
             result.Detail.AddRange(detail);
+
+            // 按根拆分：报告按磁盘 tab 切换展示。每个扫描根各查一份榜单/新增消失/明细，
+            // 保证单盘 tab 内是完整的 Top N（而非从全局榜单里按盘挑出可能不满 N 的几行）。
+            foreach (var root in roots)
+            {
+                var pr = new PerRootAnalysis { RootKey = root.Key, DisplayName = root.DisplayName };
+
+                QuerySummary(pr.Summary, new[] { root }, root.Key);
+                pr.Summary.ComparedCount = CountRowsForRoot(root.Key);
+                pr.HasAnyShrink = pr.Summary.ShrunkCount > 0;
+
+                var g = QueryGrowth(top, minBytes, minPercent, root.Key);
+                if (g.Count == 0 && !isFirstRun)
+                {
+                    g = QueryGrowth(top, 1, 0, root.Key);
+                    pr.GrowthFallbackUsed = g.Count > 0;
+                }
+                pr.GrowthTop.AddRange(g);
+
+                pr.ShrinkTop.AddRange(QueryShrinks(top, root.Key));
+                pr.NewTop.AddRange(QueryByKind("NEW", top, root.Key));
+                pr.RemovedTop.AddRange(QueryByKind("REMOVED", top, root.Key));
+
+                var d = QueryDetail(detailTop, detailMinBytes, root.Key);
+                if (d.Count == 0)
+                {
+                    d = QueryDetail(detailTop, 1, root.Key);
+                    pr.DetailFallbackUsed = d.Count > 0;
+                }
+                pr.Detail.AddRange(d);
+
+                result.PerRoot.Add(pr);
+            }
         }
         finally
         {
@@ -308,7 +366,7 @@ public sealed class GrowthAnalyzer
 
     // ------------------------------------------------------------ 汇总统计
 
-    private void QuerySummary(ChangeSummary s, IReadOnlyList<ScanRoot> roots)
+    private void QuerySummary(ChangeSummary s, IReadOnlyList<ScanRoot> roots, string? rootKey = null)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = $"""
@@ -317,8 +375,10 @@ public sealed class GrowthAnalyzer
               SUM(CASE WHEN kind = 'BOTH' AND delta < 0 THEN 1 ELSE 0 END),
               SUM(CASE WHEN kind = 'NEW' THEN 1 ELSE 0 END),
               SUM(CASE WHEN kind = 'REMOVED' THEN 1 ELSE 0 END)
-            FROM {TempTable};
+            FROM {TempTable}
+            {(rootKey != null ? "WHERE root_key = $rk" : "")};
             """;
+        if (rootKey != null) cmd.Parameters.AddWithValue("$rk", rootKey);
         using (var r = cmd.ExecuteReader())
         {
             if (r.Read())
@@ -334,14 +394,28 @@ public sealed class GrowthAnalyzer
         var p = new List<SQLiteParameter>();
         string filter = BuildRootFilter(roots, p);
         using var cmd2 = _db.Connection.CreateCommand();
-        cmd2.CommandText = $"""
-            SELECT COUNT(*), IFNULL(SUM(pr.size_bytes), 0)
-            FROM dir_snapshots_prev pr
-            WHERE pr.root_key IN ({filter})
-              AND NOT EXISTS (SELECT 1 FROM dir_snapshots c WHERE c.path = pr.path)
-              AND EXISTS (SELECT 1 FROM skip_paths s WHERE s.path = pr.path);
-            """;
-        foreach (var param in p) cmd2.Parameters.Add(param);
+        if (rootKey != null)
+        {
+            cmd2.CommandText = $"""
+                SELECT COUNT(*), IFNULL(SUM(pr.size_bytes), 0)
+                FROM dir_snapshots_prev pr
+                WHERE pr.root_key = $rk
+                  AND NOT EXISTS (SELECT 1 FROM dir_snapshots c WHERE c.path = pr.path)
+                  AND EXISTS (SELECT 1 FROM skip_paths s WHERE s.path = pr.path);
+                """;
+            cmd2.Parameters.AddWithValue("$rk", rootKey);
+        }
+        else
+        {
+            cmd2.CommandText = $"""
+                SELECT COUNT(*), IFNULL(SUM(pr.size_bytes), 0)
+                FROM dir_snapshots_prev pr
+                WHERE pr.root_key IN ({filter})
+                  AND NOT EXISTS (SELECT 1 FROM dir_snapshots c WHERE c.path = pr.path)
+                  AND EXISTS (SELECT 1 FROM skip_paths s WHERE s.path = pr.path);
+                """;
+            foreach (var param in p) cmd2.Parameters.Add(param);
+        }
         using var r2 = cmd2.ExecuteReader();
         if (r2.Read())
         {
@@ -358,10 +432,22 @@ public sealed class GrowthAnalyzer
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
+    /// <summary>按扫描根统计临时表中的行数（该根参与对比的目录总数）。</summary>
+    private long CountRowsForRoot(string rootKey)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM {TempTable} WHERE root_key = $rk;";
+        cmd.Parameters.AddWithValue("$rk", rootKey);
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
     // ------------------------------------------------------------ 榜单查询
 
-    /// <summary>增长榜：按增长量降序。排除 depth=0 的根节点，避免根目录抢占全部位置。</summary>
-    private List<GrowthItem> QueryGrowth(int top, long minBytes, double minPercent)
+    /// <summary>
+    /// 增长榜：按增长量降序。排除 depth=0 的根节点，避免根目录抢占全部位置。
+    /// <paramref name="rootKey"/> 非 null 时只统计该扫描根（报告按盘切换用）。
+    /// </summary>
+    private List<GrowthItem> QueryGrowth(int top, long minBytes, double minPercent, string? rootKey = null)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = $"""
@@ -372,31 +458,35 @@ public sealed class GrowthAnalyzer
               AND delta > 0
               AND delta >= $minBytes
               AND (IFNULL(prev_bytes, 0) = 0 OR delta * 100.0 / prev_bytes >= $minPct)
+              {(rootKey != null ? "AND root_key = $rk" : "")}
             ORDER BY delta DESC
             LIMIT $n;
             """;
         cmd.Parameters.AddWithValue("$minBytes", minBytes);
         cmd.Parameters.AddWithValue("$minPct", minPercent);
         cmd.Parameters.AddWithValue("$n", top);
+        if (rootKey != null) cmd.Parameters.AddWithValue("$rk", rootKey);
         return ReadItems(cmd);
     }
 
     /// <summary>缩减榜：按缩减量降序。</summary>
-    private List<GrowthItem> QueryShrinks(int top)
+    private List<GrowthItem> QueryShrinks(int top, string? rootKey = null)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = $"""
             SELECT path, root_key, prev_bytes, curr_bytes, file_delta, depth
             FROM {TempTable}
             WHERE kind = 'BOTH' AND delta < 0
+              {(rootKey != null ? "AND root_key = $rk" : "")}
             ORDER BY delta ASC
             LIMIT $n;
             """;
         cmd.Parameters.AddWithValue("$n", top);
+        if (rootKey != null) cmd.Parameters.AddWithValue("$rk", rootKey);
         return ReadItems(cmd);
     }
 
-    private List<GrowthItem> QueryByKind(string kind, int top)
+    private List<GrowthItem> QueryByKind(string kind, int top, string? rootKey = null)
     {
         using var cmd = _db.Connection.CreateCommand();
         string order = kind == "NEW" ? "IFNULL(curr_bytes,0) DESC" : "IFNULL(prev_bytes,0) DESC";
@@ -404,29 +494,34 @@ public sealed class GrowthAnalyzer
             SELECT path, root_key, prev_bytes, curr_bytes, file_delta, depth
             FROM {TempTable}
             WHERE kind = $kind AND depth > 0
+              {(rootKey != null ? "AND root_key = $rk" : "")}
             ORDER BY {order}
             LIMIT $n;
             """;
         cmd.Parameters.AddWithValue("$kind", kind);
         cmd.Parameters.AddWithValue("$n", top);
+        if (rootKey != null) cmd.Parameters.AddWithValue("$rk", rootKey);
         return ReadItems(cmd);
     }
 
     /// <summary>
     /// 详细明细：所有变化量超过阈值的目录，按变化量绝对值降序，最多 detailTop 行。
+    /// <paramref name="rootKey"/> 非 null 时只统计该扫描根。
     /// </summary>
-    private List<GrowthItem> QueryDetail(int detailTop, long detailMinBytes)
+    private List<GrowthItem> QueryDetail(int detailTop, long detailMinBytes, string? rootKey = null)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = $"""
             SELECT path, root_key, prev_bytes, curr_bytes, file_delta, depth, kind, delta
             FROM {TempTable}
             WHERE ABS(delta) >= $min
+              {(rootKey != null ? "AND root_key = $rk" : "")}
             ORDER BY ABS(delta) DESC
             LIMIT $n;
             """;
         cmd.Parameters.AddWithValue("$min", detailMinBytes);
         cmd.Parameters.AddWithValue("$n", detailTop);
+        if (rootKey != null) cmd.Parameters.AddWithValue("$rk", rootKey);
 
         var list = new List<GrowthItem>();
         using var r = cmd.ExecuteReader();
