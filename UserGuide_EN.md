@@ -95,7 +95,7 @@ DiskGrowthMonitor.exe -d C --lang=en    force English
 | Output | Location | Notes |
 |---|---|---|
 | **HTML report** | `reports\disk_growth_report_<timestamp>.html` | A single file — double-click to open, viewable offline, safe to send to others. Use `-o <path>` to put it elsewhere |
-| Database | `disk_growth.db` (next to the exe) | Stores the historical snapshot. **Do not delete it** — deleting it resets the tool to "never scanned" and the next run is a first run again |
+| Database | `disk_growth.db` (next to the exe by default; relocatable via `--data-dir`) | Stores the historical snapshot. **Do not delete it** — deleting it resets the tool to "never scanned" and the next run is a first run again |
 
 ### Reading the report
 
@@ -201,6 +201,7 @@ DiskGrowthMonitor.exe -h                        show help
 | Option | Description |
 |---|---|
 | `-o, --out <path>` | HTML report output path |
+| `--data-dir <dir>` | Data directory: both `disk_growth.db` and `reports\` live here, defaulting to `<exe folder>`. Scan drive C while keeping data on D to avoid filling the system drive |
 | `--no-report` | Scan and store only, generate no report |
 | `--open` | Open the report in the default browser when done |
 | `--lang <auto\|zh\|en>` | Language for program messages and the report; default `auto` |
@@ -212,7 +213,7 @@ DiskGrowthMonitor.exe -h                        show help
 | `--dev` | Developer mode: extra diagnostics; off by default |
 | `-h, --help` | Show help |
 
-> The database is fixed at `<exe directory>\disk_growth.db` and **cannot be relocated** (the `--db` option is obsolete and ignored).
+> The database defaults to `<exe directory>\disk_growth.db` and can be relocated with `--data-dir <dir>` (the `--db` option is obsolete and ignored).
 
 ---
 

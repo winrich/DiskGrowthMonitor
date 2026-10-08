@@ -89,6 +89,12 @@ public sealed class Options
     /// <summary>本次命令行是否出现过已取消的 --db（出现即忽略其值，仅用于打印一行提示）。</summary>
     public bool DbArgSeen { get; set; }
 
+    /// <summary>
+    /// 数据目录（db + reports + crash.log 的统一落点）。为空则退回 exe 同级目录（向后兼容）。
+    /// 指定后，磁盘扫描数据库与报告都写到该目录 —— 典型用途是把数据从系统盘迁到空间充足的盘。
+    /// </summary>
+    public string? DataDir { get; set; }
+
     /// <summary>HTML 报告输出路径；为空则自动生成到 reports 目录。</summary>
     public string? OutputPath { get; set; }
 
@@ -273,11 +279,18 @@ public sealed class Options
                     o.FollowReparse = true;
                     break;
                 case "--db":
-                    // 该开关已取消：数据库固定为 <exe 目录>\disk_growth.db。
+                    // 该开关已取消：数据库默认 <exe 目录>\disk_growth.db（可用 --data-dir 迁移）。
                     // 为兼容旧命令与脚本，这里仍识别但丢弃其值，由 Program 打印一行提示。
                     o.DbArgSeen = true;
                     if (i + 1 < args.Length) i++;
                     break;
+                case "--data-dir":
+                    {
+                        var v = Next();
+                        if (string.IsNullOrWhiteSpace(v)) { o.Error = Lang.T("缺少 --data-dir 的参数值。", "Missing value for --data-dir."); return o; }
+                        o.DataDir = v.Trim().Trim('"');
+                        break;
+                    }
                 case "-o":
                 case "--out":
                     {
@@ -421,7 +434,11 @@ public sealed class Options
         sb.AppendLine("                              使程序回到「从未扫描」状态；需在交互式终端确认 y/N，执行后退出");
         sb.AppendLine();
         sb.AppendLine("输出与存储：");
-        sb.AppendLine("      （数据库固定为 <exe 目录>\\disk_growth.db，无开关；旧命令中的 --db 会被忽略并提示）");
+        sb.AppendLine("      --data-dir <目录>       数据目录：数据库 disk_growth.db 与 reports\\ 统一放该目录，");
+        sb.AppendLine("                              默认 <exe 目录>。典型用途：扫描 C 盘时把数据放 D 盘，");
+        sb.AppendLine("                              避免数据库写满系统盘（指定新目录且其中无库、exe 同级有旧库时，");
+        sb.AppendLine("                              自动把旧库搬到新目录）");
+        sb.AppendLine("      （旧命令中的 --db 会被忽略并提示；数据库默认 <exe 目录>\\disk_growth.db）");
         sb.AppendLine("  -o, --out <文件路径>        HTML 报告输出路径，默认 .\\reports\\disk_growth_report_<时间>.html");
         sb.AppendLine("      --no-report             只扫描入库，不生成报告");
         sb.AppendLine("      --open                  报告生成后用默认浏览器打开");
@@ -501,8 +518,12 @@ public sealed class Options
         sb.AppendLine("                              asks for y/N confirmation in an interactive terminal, then exits");
         sb.AppendLine();
         sb.AppendLine("Output and storage:");
-        sb.AppendLine("      (the database is fixed at <exe folder>\\disk_growth.db; there is no switch for it,");
-        sb.AppendLine("       a legacy --db is ignored with a hint)");
+        sb.AppendLine("      --data-dir <dir>        Data directory: the database disk_growth.db and reports\\ are both");
+        sb.AppendLine("                              placed here, default <exe folder>. Typical use: scan drive C while");
+        sb.AppendLine("                              keeping the data on drive D, so the database does not fill up the");
+        sb.AppendLine("                              system drive (if the new directory has no database but an old one");
+        sb.AppendLine("                              sits next to the exe, the old database is moved over automatically)");
+        sb.AppendLine("      (a legacy --db is ignored with a hint; the database defaults to <exe folder>\\disk_growth.db)");
         sb.AppendLine("  -o, --out <file path>       HTML report path, default .\\reports\\disk_growth_report_<time>.html");
         sb.AppendLine("      --no-report             Scan and store only, do not generate a report");
         sb.AppendLine("      --open                  Open the report in the default browser after generating it");

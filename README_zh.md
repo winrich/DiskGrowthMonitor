@@ -86,7 +86,7 @@ DiskGrowthMonitor.exe -d ALL --open
 
 > **必须扫两次才有增长数据。** 第一次只是建立基准，第二次才会出现「增长了什么」。
 >
-> **注意**：数据库固定为 `<exe 目录>\disk_growth.db`，因此 Debug / Release 以及每个副本目录各有一份独立数据库。日常只用其中一个版本，避免两份数据对不上。
+> **注意**：数据库默认 `<exe 目录>\disk_growth.db`（可用 `--data-dir` 迁移），因此 Debug / Release 以及每个副本目录各有一份独立数据库。日常只用其中一个版本，避免两份数据对不上。
 
 ### 部署到目标机
 
@@ -165,11 +165,12 @@ DiskGrowthMonitor.exe -d ALL --open
 
 ### 输出与存储
 
-数据库固定为 `<exe 目录>\disk_growth.db`，**不提供开关**；旧命令里残留的 `--db` 会被忽略并打印一行提示。
+数据库默认 `<exe 目录>\disk_growth.db`，可用 `--data-dir` 迁移；旧命令里残留的 `--db` 会被忽略并打印一行提示。
 
 | 参数 | 说明 |
 |---|---|
-| `-o, --out <文件路径>` | HTML 报告输出路径，默认 `<exe目录>\reports\disk_growth_report_<时间>.html` |
+| `--data-dir <目录>` | 数据目录：`disk_growth.db` 与 `reports\` 统一放该目录，默认 `<exe 目录>`。典型用途：扫描 C 盘时把数据放 D 盘，避免数据库写满系统盘（指定新目录且其中无库、exe 同级有旧库时，自动把旧库搬到新目录） |
+| `-o, --out <文件路径>` | HTML 报告输出路径，默认 `<数据目录>\reports\disk_growth_report_<时间>.html` |
 | `--no-report` | 只扫描入库，不生成报告 |
 | `--open` | 报告生成后用默认浏览器打开 |
 | `--lang <档位>` | 程序提示文本语言，取 `auto` / `zh` / `en`，默认 `auto`（界面语言与代码页都是中文时用中文，否则英文） |
@@ -268,7 +269,7 @@ DiskGrowthMonitor.exe --show-env      # 只探测并打印，不扫描、不写�
 
 ## 数据库结构
 
-数据库固定为 `<exe 目录>\disk_growth.db`，可直接用任意 SQLite 工具查询。
+数据库默认 `<exe 目录>\disk_growth.db`（可用 `--data-dir` 迁移），可直接用任意 SQLite 工具查询。
 
 | 表 | 用途 |
 |---|---|
@@ -310,7 +311,7 @@ A：可以。`-r D:\Build -r D:\Data`，比全盘扫描快得多。
 A：不会。快照按扫描根各自轮换：每个根的基准都是**它自己最近一次扫描**的快照，中间隔了几轮也能接着对比；报告会如实标注「与该根上次扫描（第 N 轮）对比」，刚纳入的根则标注「首次记录」。代价是本轮没扫到的根会一直占着其快照空间（可 `--reset` 释放）。
 
 **Q：数据库能换位置吗？**
-A：不能，固定为 `<exe 目录>\disk_growth.db`。若确实需要换盘，可把该目录用 junction 指向其他盘（C 盘剩余空间很小时，百万目录的 WAL 有撑爆风险）；报告位置可用 `-o` 任意指定。
+A：能。用 `--data-dir <目录>` 把 `disk_growth.db` 与 `reports\` 一起迁到指定目录（如 `--data-dir D:\DiskGrowthData`）。指定新目录且其中无库、exe 同级有旧库时会自动搬迁旧库。这是扫 C 盘时避免数据库写满系统盘的正规做法，无需再用 junction。报告位置仍可用 `-o` 单独指定。
 
 ---
 

@@ -42,7 +42,14 @@ internal static class Program
             // 代码页永久改成 65001（同一个窗口里之后再启动的进程都会读到 65001），退出前写回原值。
             // 🔴 必须是本进程的最后一步：恢复之后 Console 的编码器与代码页就不一致了，再输出会乱码。
             //   ReportFatal 在此**之前**已完成（它在 catch 里，finally 之后才轮到这一行）。
-            try { LanguageProbe.RestoreConsoleCodePage(); } catch { }
+            //
+            // 🔴 第 69 轮修正：提权子进程接管的是父进程的控制台，代码页归父进程所有。
+            //   子进程入口读到的「原始代码页 936」来自它自己那个新控制台（已随 FreeConsole 销毁），
+            //   此时 SetConsoleOutputCP(936) 作用的是父窗口，会把父进程设的 65001 打回 936 ——
+            //   父进程随后用 UTF-8 输出的崩溃摘要被 GBK 解码，即「崩溃后屏幕乱码」。
+            //   故提权子进程退出时不恢复，由父进程自己在退出前恢复。
+            if (!HasFlag(args, "--elevated"))
+                try { LanguageProbe.RestoreConsoleCodePage(); } catch { }
         }
     }
 
@@ -63,8 +70,22 @@ internal static class Program
         try
         {
             string? path = FindArgValue(args, "--console-log");
-            if (path == null) path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "crash.log");
-            File.AppendAllText(path, text, new UTF8Encoding(false));
+            // 🔴 编码必须分流：
+            //   · 无 --console-log（本地 crash.log）：用系统 ANSI（中文 Windows = GBK/936），
+            //     记事本默认按 ANSI 读，中文直接可读 —— 修掉 2026-10 的「crash.log 乱码」问题；
+            //   · 有 --console-log（提权中继）：父进程 RelayConsoleLog/DumpAttachLog 按 UTF-8
+            //     解码，必须保持 UTF-8 无 BOM，否则中继侧反而产生新乱码。
+            Encoding enc;
+            if (path == null)
+            {
+                path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "crash.log");
+                enc = Encoding.Default;
+            }
+            else
+            {
+                enc = new UTF8Encoding(false);
+            }
+            File.AppendAllText(path, text, enc);
         }
         catch { /* 磁盘满 / 无权限：已尽力，不再冒险 */ }
     }
@@ -75,6 +96,14 @@ internal static class Program
         for (int i = 0; i + 1 < args.Length; i++)
             if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
         return null;
+    }
+
+    /// <summary>判断命令行是否含某个无值的开关（如 <c>--elevated</c>）。</summary>
+    private static bool HasFlag(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length; i++)
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>
@@ -94,6 +123,119 @@ internal static class Program
     private static void Dev(string message)
     {
         if (DevMode) Console.WriteLine(message);
+    }
+
+    /// <summary>
+    /// 解析数据目录。默认（无 --data-dir）返回 <paramref name="baseDir"/>（exe 目录，向后兼容）；
+    /// 指定时 GetFullPath + 不存在则创建，随后若非 baseDir 则尝试搬迁旧库。
+    /// 任何失败都打印警告并回退 <paramref name="baseDir"/> —— 保持可用，绝不崩。
+    /// </summary>
+    private static string ResolveDataDir(Options opt, string baseDir)
+    {
+        if (string.IsNullOrWhiteSpace(opt.DataDir))
+            return baseDir;
+
+        string dataDir;
+        try
+        {
+            dataDir = Path.GetFullPath(opt.DataDir.Trim().Trim('"'));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(Lang.F("[提示] 数据目录路径无效 {0}：{1}，已回退 exe 目录。",
+                "[Note] Invalid data directory {0}: {1}; falling back to the exe folder.",
+                opt.DataDir!, ex.Message));
+            return baseDir;
+        }
+
+        // 规范化后与 baseDir 相同（大小写不敏感）→ 等价于没指定，直接返回
+        if (string.Equals(
+                dataDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase))
+            return baseDir;
+
+        try
+        {
+            if (!Directory.Exists(dataDir))
+                Directory.CreateDirectory(dataDir);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(Lang.F("[提示] 无法创建数据目录 {0}：{1}，已回退 exe 目录。",
+                "[Note] Could not create the data directory {0}: {1}; falling back to the exe folder.",
+                dataDir, ex.Message));
+            return baseDir;
+        }
+
+        // 旧库搬迁：指定了新目录但其中无库、exe 同级有旧库时，自动搬到新目录
+        if (!MigrateDbIfNeeded(baseDir, dataDir))
+            return baseDir; // 搬迁失败：回退 exe 目录，保持可用
+
+        return dataDir;
+    }
+
+    /// <summary>
+    /// 旧库搬迁：仅当 <paramref name="dataDir"/> != <paramref name="baseDir"/> 且
+    /// 目标无 disk_growth.db、源有旧库时触发。搬迁 db + -wal + -shm（存在的都搬）。
+    /// 成功 → 删除源、打印提示、返回 true；任一步失败 → 清理目标半成品、源保留、
+    /// 打印警告、返回 false（由调用方回退 baseDir）。
+    /// </summary>
+    private static bool MigrateDbIfNeeded(string baseDir, string dataDir)
+    {
+        string srcDb = Path.Combine(baseDir, "disk_growth.db");
+        string dstDb = Path.Combine(dataDir, "disk_growth.db");
+
+        // 目标已有库，或源无旧库 → 无需搬迁
+        if (File.Exists(dstDb) || !File.Exists(srcDb))
+            return true;
+
+        // 需要搬迁的三个文件（-wal/-shm 可能不存在，跳过即可）
+        string[] names = { "disk_growth.db", "disk_growth.db-wal", "disk_growth.db-shm" };
+        var copied = new List<string>();
+        try
+        {
+            foreach (var name in names)
+            {
+                string src = Path.Combine(baseDir, name);
+                string dst = Path.Combine(dataDir, name);
+                if (!File.Exists(src)) continue;
+                File.Copy(src, dst, false);
+                copied.Add(dst);
+            }
+
+            // 验证：目标 db 存在且长度与源一致
+            var srcInfo = new FileInfo(srcDb);
+            var dstInfo = new FileInfo(dstDb);
+            if (!dstInfo.Exists || dstInfo.Length != srcInfo.Length)
+                throw new IOException(Lang.T("搬迁后校验失败（长度不一致）",
+                    "post-move verification failed (length mismatch)"));
+
+            // 搬迁成功：删除源文件，释放原盘空间
+            foreach (var name in names)
+            {
+                string src = Path.Combine(baseDir, name);
+                try { if (File.Exists(src)) File.Delete(src); }
+                catch { /* 源删除失败不影响新库使用，仅告警 */ }
+            }
+
+            Console.WriteLine(Lang.F("✓ 旧库已从 {0} 搬迁到 {1}",
+                "Moved the old database from {0} to {1}", baseDir, dataDir));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // 清理目标半成品
+            foreach (var p in copied)
+            {
+                try { if (File.Exists(p)) File.Delete(p); }
+                catch { }
+            }
+            Console.WriteLine(Lang.F("[提示] 旧库搬迁失败 {0}：{1}，已回退 exe 目录继续使用旧库。",
+                "[Note] Failed to move the old database {0}: {1}; falling back to the exe folder.",
+                srcDb, ex.Message));
+            return false;
+        }
     }
 
     private static int Run(string[] args)
@@ -204,13 +346,13 @@ internal static class Program
             Console.WriteLine();
         }
 
-        // 数据库固定放在 exe 所在目录（不提供命令行开关），
-        // 保证无论从哪个工作目录启动都指向同一份数据。
-        // 用 AppDomain.CurrentDomain.BaseDirectory 而非 Assembly.Location：后者在影子复制等
-        // 场景下不是 exe 目录。注意不能用 AppContext.BaseDirectory —— 它是 .NET Framework 4.6
-        // 才引入的，net45 目标取不到（编译期即报错）。
+        // 数据库默认放 exe 所在目录，可用 --data-dir 迁移到其它盘（典型：扫 C 盘时把数据放 D 盘，
+        // 避免数据库写满系统盘）。用 AppDomain.CurrentDomain.BaseDirectory 而非 Assembly.Location：
+        // 后者在影子复制等场景下不是 exe 目录。注意不能用 AppContext.BaseDirectory —— 它是
+        // .NET Framework 4.6 才引入的，net45 目标取不到（编译期即报错）。
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        string dbPath = Path.Combine(baseDir, "disk_growth.db");
+        string dataDir = ResolveDataDir(opt, baseDir);
+        string dbPath = Path.Combine(dataDir, "disk_growth.db");
 
         // 颜色先于首行输出启用：交互模式下才开启（日志中继/重定向会禁用，避免 ANSI 码污染），
         // 终端不支持 VT（WS2012 等）时 ConsoleStyle 内部自动降级为纯文本。
@@ -233,6 +375,8 @@ internal static class Program
 
         using var db = new DatabaseService(dbPath);
         Dev(Lang.F("[环境] 数据库：{0}", "[Env] Database: {0}", db.DatabasePath));
+        if (!string.Equals(dataDir, baseDir, StringComparison.OrdinalIgnoreCase))
+            Dev(Lang.F("[环境] 数据目录：{0}", "[Env] Data directory: {0}", dataDir));
         // 权限状态显式打印：它是「USN 增量能否生效」的唯一决定因素。
         // 以前只能从「状态与上一轮不对应」这类间接提示里倒推，现在第一眼就能看到。
         Dev(Lang.F("[环境] 权限：{0}", "[Env] Privilege: {0}",
@@ -690,7 +834,7 @@ internal static class Program
         Console.WriteLine(ConsoleStyle.Section(Lang.T("▸ 5/5  生成 HTML 报告", "▸ 5/5  Generate HTML report")));
         string reportPath = opt.OutputPath is { Length: > 0 }
             ? Path.GetFullPath(opt.OutputPath)
-            : Path.Combine(baseDir, "reports",
+            : Path.Combine(dataDir, "reports",
                 $"disk_growth_report_{FormatUtil.FileStamp(DateTime.Now)}.html");
 
         string? reportDir = Path.GetDirectoryName(reportPath);

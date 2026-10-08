@@ -86,7 +86,7 @@ DiskGrowthMonitor.exe -d ALL --open
 
 > **You need two runs before any growth data appears.** The first run only establishes a baseline; the second is what shows "what grew".
 >
-> **Note**: the database is fixed at `<exe directory>\disk_growth.db`, so Debug / Release and every copied folder each get their own database. Stick to one copy to avoid comparing two different datasets.
+> **Note**: the database defaults to `<exe directory>\disk_growth.db` (relocatable via `--data-dir`), so Debug / Release and every copied folder each get their own database. Stick to one copy to avoid comparing two different datasets.
 
 ### Deploying to a target machine
 
@@ -165,11 +165,12 @@ Engine values:
 
 ### Output and storage
 
-The database is fixed at `<exe directory>\disk_growth.db` with **no switch**; a leftover `--db` in old scripts is ignored with a warning line.
+The database defaults to `<exe directory>\disk_growth.db` and can be relocated with `--data-dir`; a leftover `--db` in old scripts is ignored with a warning line.
 
 | Option | Description |
 |---|---|
-| `-o, --out <path>` | HTML report path; defaults to `<exe dir>\reports\disk_growth_report_<timestamp>.html` |
+| `--data-dir <dir>` | Data directory: both `disk_growth.db` and `reports\` live here, defaulting to `<exe folder>`. Typical use: scan drive C while keeping the data on drive D so the database does not fill the system drive (if the new directory has no database but an old one sits next to the exe, the old database is moved over automatically) |
+| `-o, --out <path>` | HTML report path; defaults to `<data dir>\reports\disk_growth_report_<timestamp>.html` |
 | `--no-report` | Scan and store only, do not generate a report |
 | `--open` | Open the report in the default browser when done |
 | `--lang <auto\|zh\|en>` | Language used by the program's own messages; `auto` means Chinese only when both UI language and console code page are Chinese |
@@ -268,7 +269,7 @@ The report is a **self-contained single file** (inlined CSS/JS, no external depe
 
 ## Database schema
 
-The database lives at `<exe directory>\disk_growth.db` and can be queried with any SQLite tool.
+The database lives at `<exe directory>\disk_growth.db` by default (relocatable via `--data-dir`) and can be queried with any SQLite tool.
 
 | Table | Purpose |
 |---|---|
@@ -310,7 +311,7 @@ A: Yes: `-r D:\Build -r D:\Data` is far faster than a full scan.
 A: No. Snapshots rotate per scan root: each root's baseline is **its own latest scan**, so comparison picks up where that root left off even after a few rounds of not being scanned. The report honestly labels this as "compared with this root's own last scan (run #N)"; a newly added root is labeled "first record". The only cost is that roots left out of a run keep their snapshot rows (use `--reset` to release them).
 
 **Q: Can the database live somewhere else?**
-A: No — it is fixed at `<exe directory>\disk_growth.db`. If you really need another volume, point the folder at it with a junction (a WAL for millions of directories can fill a nearly-full C:); the report path remains free via `-o`.
+A: Yes. Use `--data-dir <dir>` to move both `disk_growth.db` and `reports\` to the given directory (e.g. `--data-dir D:\DiskGrowthData`). If the new directory has no database but an old one sits next to the exe, the old database is moved over automatically. This is the proper way to keep the database from filling the system drive when scanning C: — no junction needed. The report path can still be set independently with `-o`.
 
 ---
 
