@@ -1,12 +1,42 @@
-# DiskGrowthMonitor · 磁盘空间增长监控
+# DiskGrowthMonitor
 
 [**English**](README.md) | 简体中文
 
-递归扫描全盘目录占用 → 存入本地 SQLite → 下次运行与上一轮快照**逐目录对比** → 输出增长最快 / 缩减最多的目录，并生成一份自包含的 HTML 报告；对已知目录自动标注**用途与可清理性**。
+### 「C 盘怎么又满了？」
 
-> 它只回答三个问题：**磁盘被谁吃掉了、长了多少、能不能删。**
+一条命令给你**差异对比**，而不是一个猜测。
 
-面向 Windows 的单一可执行文件，零前置安装，拷过去就能用；适合放在定时任务里长期跟踪磁盘水位，也适合一次性定位「C 盘又满了」。
+[![示例报告 —— 增长最快的目录，每条都标注了能不能删](docs/images/report-growth.png)](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)
+
+**[▶ 打开在线示例报告](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)**&nbsp;&nbsp;·&nbsp;&nbsp;[English sample](https://winrich.github.io/DiskGrowthMonitor/report-en.html)
+
+---
+
+WizTree、TreeSize 告诉你**现在什么大**；DiskGrowthMonitor 告诉你**这周什么长大了** —— 并且对每个已知目录说明它**能不能删**。
+
+```console
+> DiskGrowthMonitor.exe -d C           # 第一次运行：建立基准
+> DiskGrowthMonitor.exe -d C --open    # 一周后再跑：这就是长出来的东西
+```
+
+- **20 秒** —— 全盘扫描一台约 19 万目录的系统盘
+- **1.6 秒** —— 没有变化时再跑一轮（NTFS USN 日志复用）
+- **0** —— 永远不删除任何文件，只读
+- **0 前置** —— .NET Framework 4.5，Windows 7 SP1 / Server 2012 以上全部自带
+
+### 为什么不用 WizTree？
+
+因为它们回答的是另一个问题。
+
+| 你想知道的 | WizTree / TreeSize / MangoDisk | DiskGrowthMonitor |
+|---|---|---|
+| **现在什么大** | ✅ 树图，读 MFT 秒出 | ✅（稍慢，但看下一行） |
+| **这周什么长大了** | ❌ 没有历史，只有当下快照 | ✅ 逐目录差异，按变化量排序 |
+| 这个目录**能不能删** | ❌ 让你自己猜 | ✅ 66 条目录知识库，报告内联标注 |
+| 硬链接目录（`WinSxS` 等） | 部分重复计算 | ✅ 按文件标识去重 |
+| 无人值守 / 定时任务 | 视情况 | ✅ 纯命令行、退出码、单文件报告 |
+
+磁盘被写满是一个**随时间发生的变化**，树图只能显示某一刻，看不见变化 —— 只有存下基准才看得见。这就是这个工具存在的理由。
 
 ---
 
@@ -72,6 +102,23 @@
 
 ## 快速开始
 
+### 直接用现成的
+
+从[最新发布](../../releases/latest)下载 `DiskGrowthMonitor_x64.zip`，解压到任意**可写**目录（不要放 `C:\Program Files`），然后：
+
+```console
+DiskGrowthMonitor.exe -d C          # 1) 建立基准
+DiskGrowthMonitor.exe -d C --open   # 2) 隔一段时间再跑，报告自动在浏览器打开
+```
+
+> **必须扫两次才有增长数据。** 第一次只是建立基准，第二次才会出现「增长了什么」。
+>
+> **注意**：数据库默认 `<exe 目录>\disk_growth.db`（可用 `--data-dir` 迁移），因此 Debug / Release 以及每个副本目录各有一份独立数据库。日常只用其中一个版本，避免两份数据对不上。
+>
+> 全盘首次扫描约 20 秒。建议以管理员身份运行：既能减少"拒绝访问"的盲区，也能启用 USN 增量复用 —— 这才是第二轮只需 1.6 秒的原因。
+
+### 从源码构建
+
 ```bash
 # 1) 构建（单目标 net45）
 dotnet build -c Release
@@ -83,10 +130,6 @@ DiskGrowthMonitor.exe -d ALL
 # 3) 隔一段时间再运行一次：得到增长报告
 DiskGrowthMonitor.exe -d ALL --open
 ```
-
-> **必须扫两次才有增长数据。** 第一次只是建立基准，第二次才会出现「增长了什么」。
->
-> **注意**：数据库默认 `<exe 目录>\disk_growth.db`（可用 `--data-dir` 迁移），因此 Debug / Release 以及每个副本目录各有一份独立数据库。日常只用其中一个版本，避免两份数据对不上。
 
 ### 部署到目标机
 
@@ -389,7 +432,9 @@ DiskGrowthMonitor/
 
 ## 报告内容
 
-本仓库只提供源码，不附带样例报告——报告数字与本机目录强相关。跑两轮即可得到对比报告，其固定构成如下：
+**[▶ 打开在线示例报告](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)** —— 用一套合成的演示目录（约 2,700 个目录 / 3,100 个文件 / 328 GB）生成，页面上不含任何真实机器数据；版式、数字与措辞就是程序的实际输出。
+
+跑两轮即可得到对比报告，其固定构成如下：
 
 | 区块 | 首次运行 | 此后每轮 |
 |---|---|---|

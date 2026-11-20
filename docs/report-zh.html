@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>磁盘空间增长报告 - 2026-11-21 07:41:44</title>
+<style>
+:root{
+  --bg:#f4f6f9; --card:#ffffff; --border:#e2e7ee; --border-strong:#cfd8e3;
+  --text:#1e2633; --muted:#6b7684; --muted-2:#8b95a3;
+  --up:#c62828; --up-bg:#fdecec;
+  --down:#177245; --down-bg:#eaf6ef;
+  --new:#1d5fc4; --new-bg:#eaf1fd;
+  --removed:#5a6472; --removed-bg:#eef1f5;
+  --warn:#a35a00; --warn-bg:#fdf5e6;
+  --accent:#2b6cb0;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:28px 32px 64px; background:var(--bg); color:var(--text);
+  font-family:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+h1{font-size:24px; margin:0 0 6px; font-weight:650; letter-spacing:.2px}
+h2{font-size:18px; margin:0 0 10px; font-weight:650; padding-bottom:8px; border-bottom:2px solid var(--border)}
+h3{font-size:15px; margin:0 0 10px; font-weight:650}
+section{background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:20px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(16,24,40,.04)}
+/* Per-root tab bar: switch between scan roots (multi-disk report body) */
+.root-tabs{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px;
+  position:sticky; top:0; z-index:10; background:var(--bg); padding:10px 0}
+.root-tab{border:1px solid var(--border-strong); background:var(--card); color:var(--muted);
+  padding:8px 16px; border-radius:8px; font-size:13.5px; font-weight:600; cursor:pointer;
+  font-family:inherit; transition:background .12s,color .12s,border-color .12s}
+.root-tab:hover{background:#eef4fb; color:var(--accent)}
+.root-tab.active{background:#e8f0fb; color:var(--accent); border-color:#8bb6e8; font-weight:650}
+.root-panel.is-hidden{display:none}
+.page-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:20px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.ph-sub{color:var(--muted); font-size:13px}
+.ph-badge{flex:0 0 auto; padding:6px 14px; border-radius:999px; font-size:13px; font-weight:650}
+.badge-cmp{background:var(--new-bg); color:var(--new)}
+.badge-new{background:var(--warn-bg); color:var(--warn)}
+
+.notice{border-radius:8px; padding:12px 16px; margin-bottom:20px; font-size:13.5px; border:1px solid}
+.notice-info{background:var(--new-bg); border-color:#c6daf8; color:#153f85}
+.notice-warn{background:var(--warn-bg); border-color:#f0dcb0; color:#7a4400}
+
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-bottom:20px}
+.kpi{background:#fbfcfe; border:1px solid var(--border); border-radius:8px; padding:14px 16px}
+.kpi-label{font-size:12.5px; color:var(--muted); margin-bottom:6px}
+.kpi-value{font-size:21px; font-weight:660; letter-spacing:.2px; font-variant-numeric:tabular-nums}
+.kpi-sub{font-size:12px; color:var(--muted-2); margin-top:5px}
+.kpi-up{color:var(--up)} .kpi-down{color:var(--down)} .kpi-warn{color:var(--warn)}
+.kpi-sub,.kpi-flat{color:var(--text)}
+
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+@media (max-width:1100px){.grid-2{grid-template-columns:1fr}}
+.panel{background:#fbfcfe; border:1px solid var(--border); border-radius:8px; padding:16px 18px}
+/* Full-width panel inside the overview: keep the same spacing as the two columns above */
+.panel-clean{margin-top:18px}
+
+table{border-collapse:separate; border-spacing:0; width:100%}
+table.data{font-size:13px}
+table.data th{background:#f2f5f9; color:#42505f; font-weight:620; text-align:left;
+  padding:9px 12px; border-bottom:1px solid var(--border-strong); white-space:nowrap; position:sticky; top:0; z-index:2}
+table.data td{padding:8px 12px; border-bottom:1px solid #eef1f5; vertical-align:middle}
+table.data tbody tr:hover{background:#f7fafd}
+table.data.compact td, table.data.compact th{padding:6px 10px}
+table.mini{font-size:13px}
+table.mini th{text-align:left; padding:7px 10px 7px 0; color:#42505f; font-weight:600; white-space:nowrap; vertical-align:top}
+table.mini td{padding:7px 10px; border-bottom:1px solid #eef1f5}
+table.mini td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+table.mini td.sub{color:var(--muted-2); font-size:12.5px}
+
+.table-wrap{overflow:auto; max-height:none; border:1px solid var(--border); border-radius:8px; background:var(--card)}
+.detail-section .table-wrap{max-height:70vh}
+.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.rank{width:44px; text-align:right; color:var(--muted); font-variant-numeric:tabular-nums}
+.mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace; font-size:12.5px}
+.wrap{word-break:break-all; white-space:normal; min-width:280px}
+.path{color:#243447}
+/* Purpose note for known directories: extra column-free line under the path; cleanability by colour */
+.dir-note{display:block; margin-top:3px; font-size:11.5px; line-height:1.45; font-weight:400;
+  color:var(--muted-2);
+  font-family:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,sans-serif}
+.dir-note::before{content:"▸ "; color:#aab4c0}
+.dir-note.clean-safe{color:#177245}
+.dir-note.clean-cautious{color:#a35a00}
+.dir-note.clean-forbidden{color:#c62828}
+.sub{color:var(--muted-2)}
+.strong{font-weight:660}
+.root-name{font-weight:620; white-space:nowrap}
+
+.v-up{color:var(--up)} .v-down{color:var(--down)} .v-new{color:var(--new)}
+.v-removed{color:var(--removed)} .v-muted{color:var(--muted-2)} .v-flat{color:var(--text)}
+.v-warn{color:var(--warn)}
+
+.tag{display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap}
+.tag-up{background:var(--up-bg); color:var(--up)}
+.tag-down{background:var(--down-bg); color:var(--down)}
+.tag-new{background:var(--new-bg); color:var(--new)}
+.tag-removed{background:var(--removed-bg); color:var(--removed)}
+.tag-flat{background:#f0f2f5; color:var(--muted)}
+.tag-warn{background:var(--warn-bg); color:var(--warn); margin-left:8px; font-weight:600}
+.tag-retry{background:#e8f5ee; color:#177245; margin-left:8px; font-weight:600}
+/* "Safe to clean" list: short purpose name + badge in the purpose cell, note on the next line */
+.use-title{font-weight:620; margin-right:8px}
+.tag-safe{background:#e8f5ee; color:#177245}
+tr.clean-total th,tr.clean-total td{background:#f2f7ff; border-bottom:0; font-weight:640; color:#153f85}
+
+.bar-cell{width:150px}
+.bar{display:block; height:9px; border-radius:5px; min-width:2px}
+.bar-up{background:linear-gradient(90deg,#e57373,#c62828)}
+.bar-down{background:linear-gradient(90deg,#7fc9a1,#177245)}
+
+.toolbar{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:12px}
+.toolbar input[type=search]{flex:1 1 260px; min-width:200px; padding:7px 12px;
+  border:1px solid var(--border-strong); border-radius:7px; font-size:13px; background:var(--card); color:var(--text)}
+.toolbar input[type=search]:focus{outline:2px solid #bcd6f5; outline-offset:-1px; border-color:#8bb6e8}
+.seg{display:inline-flex; border:1px solid var(--border-strong); border-radius:7px; overflow:hidden; background:var(--card)}
+.seg-btn{border:0; background:transparent; padding:7px 13px; font-size:12.5px; cursor:pointer;
+  color:var(--muted); font-family:inherit; border-right:1px solid var(--border)}
+.seg-btn:last-child{border-right:0}
+.seg-btn.active{background:#e8f0fb; color:var(--accent); font-weight:650}
+.chk{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer; user-select:none}
+.toolbar-info{font-size:12.5px; color:var(--muted-2); margin-left:auto; font-variant-numeric:tabular-nums}
+
+th[data-key]{cursor:pointer; user-select:none}
+th[data-key]:hover{background:#e9eef5}
+th.sorted-asc::after{content:" ▲"; color:var(--accent); font-size:10px}
+th.sorted-desc::after{content:" ▼"; color:var(--accent); font-size:10px}
+
+details.skip-group{border:1px solid var(--border); border-radius:8px; margin-bottom:12px; background:#fbfcfe}
+details.skip-group > summary{cursor:pointer; padding:11px 15px; font-weight:600; display:flex; align-items:center;
+  gap:10px; list-style:none}
+details.skip-group > summary::-webkit-details-marker{display:none}
+details.skip-group > summary::before{content:"▸"; color:var(--muted); font-size:12px; transition:transform .15s}
+details.skip-group[open] > summary::before{transform:rotate(90deg)}
+.skip-title{flex:0 0 auto}
+.skip-count{color:var(--muted-2); font-weight:500; font-size:12.5px}
+details.skip-group .table-wrap{margin:0 15px 15px}
+
+.empty{color:var(--muted-2); padding:18px; text-align:center; background:#fafbfd;
+  border:1px dashed var(--border-strong); border-radius:8px}
+.hint{color:var(--muted-2); font-size:12.5px; margin:10px 0 0}
+.section-desc{color:var(--muted); font-size:13px; margin:0 0 14px}
+
+.page-foot{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:20px 22px;
+  color:var(--muted); font-size:13px}
+.page-foot h3{margin-bottom:10px; color:var(--text)}
+ul.notes{margin:0 0 14px; padding-left:20px}
+ul.notes li{margin-bottom:6px}
+.foot-meta{font-size:12.5px; color:var(--muted-2); margin-top:4px; word-break:break-all}
+</style>
+</head>
+<body>
+<header class="page-head">
+  <div class="ph-main">
+    <h1>磁盘空间增长报告</h1>
+    <div class="ph-sub">扫描时间 2026-11-21 07:41:44　·　批次 #2　·　扫描根：C:</div>
+  </div>
+  <div class="ph-badge badge-cmp">与上一轮对比</div>
+</header>
+<section>
+<h2>概览</h2>
+<div class="kpis">
+<div class="kpi">
+  <div class="kpi-label">本次扫描总占用</div>
+  <div class="kpi-value kpi-sub">328.20 GB</div>
+  <div class="kpi-sub">所有扫描根子树累计</div>
+</div>
+<div class="kpi">
+  <div class="kpi-label">相比上次变化</div>
+  <div class="kpi-value kpi-up">+3.75 GB</div>
+  <div class="kpi-sub">上次 324.45 GB（+1.15%）</div>
+</div>
+<div class="kpi">
+  <div class="kpi-label">目录总数</div>
+  <div class="kpi-value kpi-sub">2,744</div>
+  <div class="kpi-sub">其中本轮新增 4</div>
+</div>
+<div class="kpi">
+  <div class="kpi-label">文件总数</div>
+  <div class="kpi-value kpi-sub">3,138</div>
+  <div class="kpi-sub">含全部文件</div>
+</div>
+<div class="kpi">
+  <div class="kpi-label">扫描耗时</div>
+  <div class="kpi-value kpi-sub">196ms</div>
+  <div class="kpi-sub">开始于 2026-11-21 07:41:44</div>
+</div>
+<div class="kpi">
+  <div class="kpi-label">跳过项</div>
+  <div class="kpi-value kpi-sub">0</div>
+  <div class="kpi-sub">排除 0 · 权限 0 · 链接 0 · 异常 0</div>
+</div>
+</div>
+<div class="grid-2">
+<div class="panel">
+<h3>目录变化规模</h3>
+<table class="mini">
+<tbody>
+<tr><th>体积增大的目录</th><td class="num v-up">23</td><td class="sub"></td></tr>
+<tr><th>体积减小的目录</th><td class="num v-down">10</td><td class="sub"></td></tr>
+<tr><th>本轮新增目录</th><td class="num v-new">4</td><td class="sub"></td></tr>
+<tr><th>本轮消失目录</th><td class="num v-removed">0</td><td class="sub"></td></tr>
+</tbody>
+</table>
+<p class="hint">计数为目录级统计：父目录的变化天然包含其子目录的变化，因此各类目录数量不可直接相加理解。</p>
+</div>
+<div class="panel">
+<h3>本次扫描配置</h3>
+<table class="mini">
+<tbody>
+<tr><th>扫描根</th><td>C:</td></tr>
+<tr><th>默认排除</th><td>已禁用</td></tr>
+<tr><th>硬链接去重</th><td>已启用</td></tr>
+<tr><th>跟随符号链接</th><td>否</td></tr>
+<tr><th>增长榜阈值</th><td>≥ 100 MB，取前 30 条</td></tr>
+<tr><th>明细表阈值</th><td>变化量 ≥ 1 MB，最多 500 行</td></tr>
+<tr><th>数据库</th><td class="mono wrap">C:\DiskGrowthData\disk_growth.db</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="panel panel-clean">
+<h3>可安全清理的目录<span class="skip-count">　共 5 个，合计 2.79 GB</span></h3>
+<div class="table-wrap">
+<table class="data compact">
+<thead>
+<tr><th class="rank">#</th><th>路径</th><th>用途</th><th class="num">占用</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="rank">1</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Cache</td>
+  <td><span class="use-title">Chrome 网页缓存</span><span class="tag tag-safe">可安全清理</span><span class="dir-note">网页图片/脚本/样式等缓存副本，删除后首次访问会稍慢</span></td>
+  <td class="num strong">2.13 GB</td>
+</tr>
+<tr>
+  <td class="rank">2</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache</td>
+  <td><span class="use-title">Edge 网页缓存</span><span class="tag tag-safe">可安全清理</span><span class="dir-note">与 Chrome 结构相同，可安全清理</span></td>
+  <td class="num strong">300.00 MB</td>
+</tr>
+<tr>
+  <td class="rank">3</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Code Cache</td>
+  <td><span class="use-title">Chrome 代码缓存</span><span class="tag tag-safe">可安全清理</span><span class="dir-note">已编译的 JavaScript 缓存，可安全清理</span></td>
+  <td class="num strong">185.00 MB</td>
+</tr>
+<tr>
+  <td class="rank">4</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Temp</td>
+  <td><span class="use-title">用户临时文件</span><span class="tag tag-safe">可安全清理</span><span class="dir-note">各程序运行期临时文件；Windows 会自动重建该目录</span></td>
+  <td class="num strong">150.00 MB</td>
+</tr>
+<tr>
+  <td class="rank">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\npm-cache</td>
+  <td><span class="use-title">npm 缓存</span><span class="tag tag-safe">可安全清理</span><span class="dir-note">Node.js 包缓存</span></td>
+  <td class="num strong">42.67 MB</td>
+</tr>
+<tr class="clean-total"><th colspan="3">可安全清理空间合计</th><td class="num">2.79 GB</td></tr>
+</tbody>
+</table>
+</div>
+<p class="hint">占用为该目录子树的累计值（已扣除硬链接重复、已剔除被排除的子目录）；清单只收录最外层目录，因此合计不会重复计算。清单仅覆盖<strong>本轮实际扫描到</strong>的目录：未以管理员身份运行、或使用了 <span class="mono">--no-knowledge-rescan</span> 时，被排除目录下的可清理目录不在扫描范围内，合计会偏小。标记为「谨慎清理」的目录（如 <span class="mono">C:\Windows\SoftwareDistribution</span>）未计入本合计。</p>
+</div>
+</section>
+<section>
+<h2>各扫描根对比</h2>
+<div class="table-wrap">
+<table class="data">
+<thead>
+<tr><th>扫描根</th><th class="num">本次占用</th><th class="num">上次占用</th><th class="num">变化量</th><th class="num">变化率</th><th class="num">目录数</th><th class="num">文件数</th><th class="num">磁盘容量</th><th class="num">剩余空间</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="root-name">C:</td>
+  <td class="num">328.20 GB</td>
+  <td class="num sub">324.45 GB</td>
+  <td class="num v-up">+3.75 GB</td>
+  <td class="num v-up">+1.15%</td>
+  <td class="num sub">2,743</td>
+  <td class="num sub">3,138</td>
+  <td class="num sub">341.68 GB</td>
+  <td class="num sub">8.23 GB</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="hint">「本次占用」为目录树逐层累计的真实占用（已扣除硬链接重复、已剔除被排除目录）。</p>
+</section>
+<section id="volgap">
+<h2>容量口径对照</h2>
+<p class="section-desc">本表回答一个常见疑问：<strong>为什么这里统计的占用小于资源管理器显示的已用空间？</strong>「本次统计」是逐目录累计的<strong>去重后文件逻辑大小之和</strong>，「卷已用」是卷属性显示的<strong>已分配簇数</strong>，后者包含不属任何目录的部分，因此前者通常小于后者几个百分点，<strong>属口径差异、不代表有目录被漏扫</strong>。</p>
+<div class="table-wrap">
+<table class="data">
+<thead>
+<tr><th>卷</th><th class="num">卷容量</th><th class="num">卷已用</th><th class="num">本次统计</th><th class="num">差额</th><th class="num">差额率</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="root-name">C:</td>
+  <td class="num sub">341.68 GB</td>
+  <td class="num">333.45 GB</td>
+  <td class="num">328.20 GB</td>
+  <td class="num sub">+5.25 GB</td>
+  <td class="num sub">1.58%</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="hint">差额来自三处，都不是漏扫：① NTFS 元数据与 MFT 保留区（<span class="mono">$MFT</span>、目录索引 <span class="mono">$I30</span>、<span class="mono">$Secure:$SDS</span> 等）不属任何目录，系统却计入卷已用；② 被排除或被跳过的目录，其占用不计入统计（见「跳过清单」）；③ 若关闭硬链接去重，跨目录指向的同一份物理数据会被重复计入，此时统计可能反而<strong>大于</strong>卷已用、差额为负。</p>
+</section>
+<section id="growth">
+<h2>增长最快的目录</h2>
+<p class="section-desc">按目录自身子树占用变化量降序排列</p>
+<div class="table-wrap">
+<table class="data">
+<thead>
+<tr><th class="rank">#</th><th>路径</th><th class="num">变化量</th><th class="num">变化率</th><th class="num">本次占用</th><th class="num">上次占用</th><th class="num">文件数变化</th><th>相对幅度</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="rank">1</td>
+  <td class="mono wrap path">C:\Users</td>
+  <td class="num v-up strong">+3.75 GB</td>
+  <td class="num v-up">+2.26%</td>
+  <td class="num">169.64 GB</td>
+  <td class="num sub">165.89 GB</td>
+  <td class="num sub">+32</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:100%"></span></td>
+</tr>
+<tr>
+  <td class="rank">2</td>
+  <td class="mono wrap path">C:\Users\Demo</td>
+  <td class="num v-up strong">+3.75 GB</td>
+  <td class="num v-up">+2.29%</td>
+  <td class="num">167.64 GB</td>
+  <td class="num sub">163.89 GB</td>
+  <td class="num sub">+32</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:100%"></span></td>
+</tr>
+<tr>
+  <td class="rank">3</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming</td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num v-up">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:63.1%"></span></td>
+</tr>
+<tr>
+  <td class="rank">4</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent<span class="dir-note clean-cautious" title="QQ / 微信等客户端的配置与本地缓存">腾讯软件数据 · 谨慎清理</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num v-up">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:63.1%"></span></td>
+</tr>
+<tr>
+  <td class="rank">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat</td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num v-up">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:63.1%"></span></td>
+</tr>
+<tr>
+  <td class="rank">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage</td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num v-up">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:63.1%"></span></td>
+</tr>
+<tr>
+  <td class="rank">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage\2026-08</td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num v-up">+71.18%</td>
+  <td class="num">5.68 GB</td>
+  <td class="num sub">3.32 GB</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:63.1%"></span></td>
+</tr>
+<tr>
+  <td class="rank">8</td>
+  <td class="mono wrap path">C:\Users\Demo\Downloads<span class="dir-note clean-cautious" title="用户下载的文件，含安装包/文档等，需自行确认">下载目录 · 谨慎清理</span></td>
+  <td class="num v-up strong">+1.72 GB</td>
+  <td class="num v-up">NEW</td>
+  <td class="num">1.72 GB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:45.89%"></span></td>
+</tr>
+<tr>
+  <td class="rank">9</td>
+  <td class="mono wrap path">C:\Users\Demo\Downloads\installers</td>
+  <td class="num v-up strong">+1.72 GB</td>
+  <td class="num v-up">NEW</td>
+  <td class="num">1.72 GB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+6</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:45.89%"></span></td>
+</tr>
+<tr>
+  <td class="rank">10</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData</td>
+  <td class="num v-up strong">+1.40 GB</td>
+  <td class="num v-up">+5.96%</td>
+  <td class="num">24.92 GB</td>
+  <td class="num sub">23.52 GB</td>
+  <td class="num sub">+10</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:37.42%"></span></td>
+</tr>
+<tr>
+  <td class="rank">11</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google</td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num v-up">+83.42%</td>
+  <td class="num">2.35 GB</td>
+  <td class="num sub">1.28 GB</td>
+  <td class="num sub">+15</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:28.55%"></span></td>
+</tr>
+<tr>
+  <td class="rank">12</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome</td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num v-up">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:28.55%"></span></td>
+</tr>
+<tr>
+  <td class="rank">13</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data<span class="dir-note clean-cautious" title="浏览器全部数据的根目录：缓存、历史、Cookie、扩展、书签都在这下面">Chrome 用户数据目录 · 谨慎清理</span></td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num v-up">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:28.55%"></span></td>
+</tr>
+<tr>
+  <td class="rank">14</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default</td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num v-up">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:28.55%"></span></td>
+</tr>
+<tr>
+  <td class="rank">15</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Cache<span class="dir-note clean-safe" title="网页图片/脚本/样式等缓存副本，删除后首次访问会稍慢">Chrome 网页缓存 · 可安全清理</span></td>
+  <td class="num v-up strong">+1.01 GB</td>
+  <td class="num v-up">+89.57%</td>
+  <td class="num">2.13 GB</td>
+  <td class="num sub">1.12 GB</td>
+  <td class="num sub">+12</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:26.86%"></span></td>
+</tr>
+<tr>
+  <td class="rank">16</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams</td>
+  <td class="num v-up strong">+430.00 MB</td>
+  <td class="num v-up">NEW</td>
+  <td class="num">430.00 MB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+8</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:11.21%"></span></td>
+</tr>
+<tr>
+  <td class="rank">17</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams\Cache</td>
+  <td class="num v-up strong">+430.00 MB</td>
+  <td class="num v-up">NEW</td>
+  <td class="num">430.00 MB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+8</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:11.21%"></span></td>
+</tr>
+<tr>
+  <td class="rank">18</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents<span class="dir-note clean-cautious" title="用户文档">文档目录 · 谨慎清理</span></td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num v-up">+3.31%</td>
+  <td class="num">10.96 GB</td>
+  <td class="num sub">10.61 GB</td>
+  <td class="num sub">+12</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:9.39%"></span></td>
+</tr>
+<tr>
+  <td class="rank">19</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work</td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num v-up">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:9.39%"></span></td>
+</tr>
+<tr>
+  <td class="rank">20</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work\QuizApp</td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num v-up">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:9.39%"></span></td>
+</tr>
+<tr>
+  <td class="rank">21</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work\QuizApp\node_modules</td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num v-up">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:9.39%"></span></td>
+</tr>
+<tr>
+  <td class="rank">22</td>
+  <td class="mono wrap path">C:\Users\Demo\.nuget</td>
+  <td class="num v-up strong">+280.00 MB</td>
+  <td class="num v-up">+11.67%</td>
+  <td class="num">2.62 GB</td>
+  <td class="num sub">2.34 GB</td>
+  <td class="num sub">+4</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:7.3%"></span></td>
+</tr>
+<tr>
+  <td class="rank">23</td>
+  <td class="mono wrap path">C:\Users\Demo\.nuget\packages<span class="dir-note clean-cautious" title="解压后的包缓存；删除后需重新还原（离线环境慎删）">NuGet 本机包缓存 · 谨慎清理</span></td>
+  <td class="num v-up strong">+280.00 MB</td>
+  <td class="num v-up">+11.67%</td>
+  <td class="num">2.62 GB</td>
+  <td class="num sub">2.34 GB</td>
+  <td class="num sub">+4</td>
+  <td class="bar-cell"><span class="bar bar-up" style="width:7.3%"></span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="shrink">
+<h2>缩减最多的目录</h2>
+<p class="section-desc">按目录自身子树占用变化量升序排列</p>
+<div class="table-wrap">
+<table class="data">
+<thead>
+<tr><th class="rank">#</th><th>路径</th><th class="num">变化量</th><th class="num">变化率</th><th class="num">本次占用</th><th class="num">上次占用</th><th class="num">文件数变化</th><th>相对幅度</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="rank">1</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker\wsl\disk</td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num v-down">-31.90%</td>
+  <td class="num">2.79 GB</td>
+  <td class="num sub">4.10 GB</td>
+  <td class="num sub">0</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:100%"></span></td>
+</tr>
+<tr>
+  <td class="rank">2</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker\wsl</td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num v-down">-31.90%</td>
+  <td class="num">2.79 GB</td>
+  <td class="num sub">4.10 GB</td>
+  <td class="num sub">0</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:100%"></span></td>
+</tr>
+<tr>
+  <td class="rank">3</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker</td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num v-down">-31.58%</td>
+  <td class="num">2.83 GB</td>
+  <td class="num sub">4.14 GB</td>
+  <td class="num sub">0</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:100%"></span></td>
+</tr>
+<tr>
+  <td class="rank">4</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local</td>
+  <td class="num v-down strong">-985.00 MB</td>
+  <td class="num v-down">-5.70%</td>
+  <td class="num">15.92 GB</td>
+  <td class="num sub">16.88 GB</td>
+  <td class="num sub">+4</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:73.51%"></span></td>
+</tr>
+<tr>
+  <td class="rank">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Temp<span class="dir-note clean-safe" title="各程序运行期临时文件；Windows 会自动重建该目录">用户临时文件 · 可安全清理</span></td>
+  <td class="num v-down strong">-750.00 MB</td>
+  <td class="num v-down">-83.33%</td>
+  <td class="num">150.00 MB</td>
+  <td class="num sub">900.00 MB</td>
+  <td class="num sub">-14</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:55.97%"></span></td>
+</tr>
+<tr>
+  <td class="rank">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache\Cache_Data</td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num v-down">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:31.34%"></span></td>
+</tr>
+<tr>
+  <td class="rank">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache<span class="dir-note clean-safe" title="与 Chrome 结构相同，可安全清理">Edge 网页缓存 · 可安全清理</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num v-down">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:31.34%"></span></td>
+</tr>
+<tr>
+  <td class="rank">8</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default</td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num v-down">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:31.34%"></span></td>
+</tr>
+<tr>
+  <td class="rank">9</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data<span class="dir-note clean-cautious" title="浏览器全部数据的根目录（Cache/History/Cookies/扩展）">Edge 用户数据目录 · 谨慎清理</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num v-down">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:31.34%"></span></td>
+</tr>
+<tr>
+  <td class="rank">10</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge</td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num v-down">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="bar-cell"><span class="bar bar-down" style="width:31.34%"></span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="newremoved">
+<h2>新增与消失的目录</h2>
+<p class="section-desc">新增 = 上一轮快照中不存在；消失 = 本轮不存在且未被主动跳过。</p>
+<div class="grid-2">
+<div class="panel">
+<h3>新增目录（共 4 个，显示占用最大的前 4 个）</h3>
+<table class="data compact">
+<thead><tr><th>路径</th><th class="num">占用</th><th class="num">文件数变化</th></tr></thead>
+<tbody>
+  <tr><td class="mono wrap path">C:\Users\Demo\Downloads\installers</td><td class="num v-new">1.72 GB</td><td class="num sub">+6</td></tr>
+  <tr><td class="mono wrap path">C:\Users\Demo\Downloads<span class="dir-note clean-cautious" title="用户下载的文件，含安装包/文档等，需自行确认">下载目录 · 谨慎清理</span></td><td class="num v-new">1.72 GB</td><td class="num sub">+6</td></tr>
+  <tr><td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams\Cache</td><td class="num v-new">430.00 MB</td><td class="num sub">+8</td></tr>
+  <tr><td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams</td><td class="num v-new">430.00 MB</td><td class="num sub">+8</td></tr>
+</tbody>
+</table>
+</div>
+<div class="panel">
+<h3>消失目录</h3>
+<div class="empty">无</div>
+</div>
+</div>
+</section>
+<section id="detail" class="detail-section">
+<h2>详细明细</h2>
+<p class="section-desc">所有变化量 ≥ 1 MB 的目录，按变化量绝对值降序，最多显示 500 行（实际 37 行）。支持搜索、排序与筛选。</p>
+<div class="toolbar">
+  <input type="search" class="dt-search" placeholder="按路径关键字搜索…" autocomplete="off">
+  <div class="seg dt-status">
+    <button type="button" class="seg-btn active" data-status="">全部</button>
+    <button type="button" class="seg-btn" data-status="grown">增长</button>
+    <button type="button" class="seg-btn" data-status="shrunk">缩减</button>
+    <button type="button" class="seg-btn" data-status="new">新增</button>
+    <button type="button" class="seg-btn" data-status="removed">消失</button>
+    <button type="button" class="seg-btn" data-status="unchanged">无变化</button>
+  </div>
+  <label class="chk"><input type="checkbox" class="dt-leaf"> <span>仅显示最深层级（隐藏已被下层级覆盖的父目录）</span></label>
+  <span class="toolbar-info dt-count"></span>
+</div>
+<div class="table-wrap">
+<table class="data sortable" id="dtTable">
+<thead>
+<tr><th data-key="status">状态</th><th data-key="delta" class="num sorted-desc">变化量</th><th data-key="pct" class="num">变化率</th><th data-key="curr" class="num">本次占用</th><th data-key="prev" class="num">上次占用</th><th data-key="fdelta" class="num">文件数变化</th><th data-key="depth" class="num">层级</th><th data-key="path">路径</th></tr>
+</thead>
+<tbody class="dt-body">
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="4021288960" data-pct="2.2851" data-curr="179996808534" data-prev="175975519574" data-fdelta="32" data-depth="2" data-path="C:\Users\Demo">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+3.75 GB</td>
+  <td class="num">+2.29%</td>
+  <td class="num">167.64 GB</td>
+  <td class="num sub">163.89 GB</td>
+  <td class="num sub">+32</td>
+  <td class="num sub">2</td>
+  <td class="mono wrap path">C:\Users\Demo</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="4021288960" data-pct="2.2576" data-curr="182144292182" data-prev="178123003222" data-fdelta="32" data-depth="1" data-path="C:\Users">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+3.75 GB</td>
+  <td class="num">+2.26%</td>
+  <td class="num">169.64 GB</td>
+  <td class="num sub">165.89 GB</td>
+  <td class="num sub">+32</td>
+  <td class="num sub">1</td>
+  <td class="mono wrap path">C:\Users</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="4021288960" data-pct="1.1543" data-curr="352399480150" data-prev="348378191190" data-fdelta="32" data-depth="0" data-path="C:">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+3.75 GB</td>
+  <td class="num">+1.15%</td>
+  <td class="num">328.20 GB</td>
+  <td class="num sub">324.45 GB</td>
+  <td class="num sub">+32</td>
+  <td class="num sub">0</td>
+  <td class="mono wrap path">C:</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="2537553920" data-pct="71.1765" data-curr="6102712320" data-prev="3565158400" data-fdelta="6" data-depth="8" data-path="C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage\2026-08">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num">+71.18%</td>
+  <td class="num">5.68 GB</td>
+  <td class="num sub">3.32 GB</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">8</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage\2026-08</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="2537553920" data-pct="35.5882" data-curr="9667870720" data-prev="7130316800" data-fdelta="6" data-depth="7" data-path="C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat\FileStorage</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="2537553920" data-pct="35.5882" data-curr="9667870720" data-prev="7130316800" data-fdelta="6" data-depth="6" data-path="C:\Users\Demo\AppData\Roaming\Tencent\WeChat">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent\WeChat</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="2537553920" data-pct="35.5882" data-curr="9667870720" data-prev="7130316800" data-fdelta="6" data-depth="5" data-path="C:\Users\Demo\AppData\Roaming\Tencent">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming\Tencent<span class="dir-note clean-cautious" title="QQ / 微信等客户端的配置与本地缓存">腾讯软件数据 · 谨慎清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="2537553920" data-pct="35.5882" data-curr="9667870720" data-prev="7130316800" data-fdelta="6" data-depth="4" data-path="C:\Users\Demo\AppData\Roaming">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+2.36 GB</td>
+  <td class="num">+35.59%</td>
+  <td class="num">9.00 GB</td>
+  <td class="num sub">6.64 GB</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">4</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Roaming</td>
+</tr>
+<tr class="row-up" data-status="new" data-statusrank="2" data-delta="1845493760" data-pct="Infinity" data-curr="1845493760" data-prev="0" data-fdelta="6" data-depth="4" data-path="C:\Users\Demo\Downloads\installers">
+  <td><span class="tag tag-up">新增</span></td>
+  <td class="num v-up strong">+1.72 GB</td>
+  <td class="num">NEW</td>
+  <td class="num">1.72 GB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">4</td>
+  <td class="mono wrap path">C:\Users\Demo\Downloads\installers</td>
+</tr>
+<tr class="row-up" data-status="new" data-statusrank="2" data-delta="1845493760" data-pct="Infinity" data-curr="1845493760" data-prev="0" data-fdelta="6" data-depth="3" data-path="C:\Users\Demo\Downloads">
+  <td><span class="tag tag-up">新增</span></td>
+  <td class="num v-up strong">+1.72 GB</td>
+  <td class="num">NEW</td>
+  <td class="num">1.72 GB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+6</td>
+  <td class="num sub">3</td>
+  <td class="mono wrap path">C:\Users\Demo\Downloads<span class="dir-note clean-cautious" title="用户下载的文件，含安装包/文档等，需自行确认">下载目录 · 谨慎清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1504706560" data-pct="5.9575" data-curr="26762106198" data-prev="25257399638" data-fdelta="10" data-depth="3" data-path="C:\Users\Demo\AppData">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.40 GB</td>
+  <td class="num">+5.96%</td>
+  <td class="num">24.92 GB</td>
+  <td class="num sub">23.52 GB</td>
+  <td class="num sub">+10</td>
+  <td class="num sub">3</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-1405091840" data-pct="-31.9048" data-curr="2998927360" data-prev="4404019200" data-fdelta="0" data-depth="7" data-path="C:\Users\Demo\AppData\Local\Docker\wsl\disk">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num">-31.90%</td>
+  <td class="num">2.79 GB</td>
+  <td class="num sub">4.10 GB</td>
+  <td class="num sub">0</td>
+  <td class="num sub">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker\wsl\disk</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-1405091840" data-pct="-31.9048" data-curr="2998927360" data-prev="4404019200" data-fdelta="0" data-depth="6" data-path="C:\Users\Demo\AppData\Local\Docker\wsl">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num">-31.90%</td>
+  <td class="num">2.79 GB</td>
+  <td class="num sub">4.10 GB</td>
+  <td class="num sub">0</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker\wsl</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-1405091840" data-pct="-31.5839" data-curr="3043666602" data-prev="4448758442" data-fdelta="0" data-depth="5" data-path="C:\Users\Demo\AppData\Local\Docker">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-1.31 GB</td>
+  <td class="num">-31.58%</td>
+  <td class="num">2.83 GB</td>
+  <td class="num sub">4.14 GB</td>
+  <td class="num sub">0</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Docker</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1148190720" data-pct="86.2205" data-curr="2479882240" data-prev="1331691520" data-fdelta="15" data-depth="8" data-path="C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="num sub">8</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1148190720" data-pct="86.2205" data-curr="2479882240" data-prev="1331691520" data-fdelta="15" data-depth="7" data-path="C:\Users\Demo\AppData\Local\Google\Chrome\User Data">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="num sub">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data<span class="dir-note clean-cautious" title="浏览器全部数据的根目录：缓存、历史、Cookie、扩展、书签都在这下面">Chrome 用户数据目录 · 谨慎清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1148190720" data-pct="86.2205" data-curr="2479882240" data-prev="1331691520" data-fdelta="15" data-depth="6" data-path="C:\Users\Demo\AppData\Local\Google\Chrome">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num">+86.22%</td>
+  <td class="num">2.31 GB</td>
+  <td class="num sub">1.24 GB</td>
+  <td class="num sub">+15</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1148190720" data-pct="83.418" data-curr="2524621482" data-prev="1376430762" data-fdelta="15" data-depth="5" data-path="C:\Users\Demo\AppData\Local\Google">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.07 GB</td>
+  <td class="num">+83.42%</td>
+  <td class="num">2.35 GB</td>
+  <td class="num sub">1.28 GB</td>
+  <td class="num sub">+15</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="1080033280" data-pct="89.5652" data-curr="2285895680" data-prev="1205862400" data-fdelta="12" data-depth="9" data-path="C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Cache">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+1.01 GB</td>
+  <td class="num">+89.57%</td>
+  <td class="num">2.13 GB</td>
+  <td class="num sub">1.12 GB</td>
+  <td class="num sub">+12</td>
+  <td class="num sub">9</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Cache<span class="dir-note clean-safe" title="网页图片/脚本/样式等缓存副本，删除后首次访问会稍慢">Chrome 网页缓存 · 可安全清理</span></td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-1032847360" data-pct="-5.6978" data-curr="17094235478" data-prev="18127082838" data-fdelta="4" data-depth="4" data-path="C:\Users\Demo\AppData\Local">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-985.00 MB</td>
+  <td class="num">-5.70%</td>
+  <td class="num">15.92 GB</td>
+  <td class="num sub">16.88 GB</td>
+  <td class="num sub">+4</td>
+  <td class="num sub">4</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-786432000" data-pct="-83.3333" data-curr="157286400" data-prev="943718400" data-fdelta="-14" data-depth="5" data-path="C:\Users\Demo\AppData\Local\Temp">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-750.00 MB</td>
+  <td class="num">-83.33%</td>
+  <td class="num">150.00 MB</td>
+  <td class="num sub">900.00 MB</td>
+  <td class="num sub">-14</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Temp<span class="dir-note clean-safe" title="各程序运行期临时文件；Windows 会自动重建该目录">用户临时文件 · 可安全清理</span></td>
+</tr>
+<tr class="row-up" data-status="new" data-statusrank="2" data-delta="450887680" data-pct="Infinity" data-curr="450887680" data-prev="0" data-fdelta="8" data-depth="7" data-path="C:\Users\Demo\AppData\Local\Microsoft\Teams\Cache">
+  <td><span class="tag tag-up">新增</span></td>
+  <td class="num v-up strong">+430.00 MB</td>
+  <td class="num">NEW</td>
+  <td class="num">430.00 MB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+8</td>
+  <td class="num sub">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams\Cache</td>
+</tr>
+<tr class="row-up" data-status="new" data-statusrank="2" data-delta="450887680" data-pct="Infinity" data-curr="450887680" data-prev="0" data-fdelta="8" data-depth="6" data-path="C:\Users\Demo\AppData\Local\Microsoft\Teams">
+  <td><span class="tag tag-up">新增</span></td>
+  <td class="num v-up strong">+430.00 MB</td>
+  <td class="num">NEW</td>
+  <td class="num">430.00 MB</td>
+  <td class="num sub">—</td>
+  <td class="num sub">+8</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Teams</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-440401920" data-pct="-58.3333" data-curr="314572800" data-prev="754974720" data-fdelta="-5" data-depth="10" data-path="C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache\Cache_Data">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="num sub">10</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache\Cache_Data</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-440401920" data-pct="-58.3333" data-curr="314572800" data-prev="754974720" data-fdelta="-5" data-depth="9" data-path="C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="num sub">9</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default\Cache<span class="dir-note clean-safe" title="与 Chrome 结构相同，可安全清理">Edge 网页缓存 · 可安全清理</span></td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-440401920" data-pct="-58.3333" data-curr="314572800" data-prev="754974720" data-fdelta="-5" data-depth="8" data-path="C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="num sub">8</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data\Default</td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-440401920" data-pct="-58.3333" data-curr="314572800" data-prev="754974720" data-fdelta="-5" data-depth="7" data-path="C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="num sub">7</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge\User Data<span class="dir-note clean-cautious" title="浏览器全部数据的根目录（Cache/History/Cookies/扩展）">Edge 用户数据目录 · 谨慎清理</span></td>
+</tr>
+<tr class="row-down" data-status="shrunk" data-statusrank="1" data-delta="-440401920" data-pct="-58.3333" data-curr="314572800" data-prev="754974720" data-fdelta="-5" data-depth="6" data-path="C:\Users\Demo\AppData\Local\Microsoft\Edge">
+  <td><span class="tag tag-down">缩减</span></td>
+  <td class="num v-down strong">-420.00 MB</td>
+  <td class="num">-58.33%</td>
+  <td class="num">300.00 MB</td>
+  <td class="num sub">720.00 MB</td>
+  <td class="num sub">-5</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft\Edge</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="377487360" data-pct="58.0645" data-curr="1027604480" data-prev="650117120" data-fdelta="12" data-depth="6" data-path="C:\Users\Demo\Documents\Work\QuizApp\node_modules">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="num sub">6</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work\QuizApp\node_modules</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="377487360" data-pct="58.0645" data-curr="1027604480" data-prev="650117120" data-fdelta="12" data-depth="5" data-path="C:\Users\Demo\Documents\Work\QuizApp">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work\QuizApp</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="377487360" data-pct="58.0645" data-curr="1027604480" data-prev="650117120" data-fdelta="12" data-depth="4" data-path="C:\Users\Demo\Documents\Work">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num">+58.06%</td>
+  <td class="num">980.00 MB</td>
+  <td class="num sub">620.00 MB</td>
+  <td class="num sub">+12</td>
+  <td class="num sub">4</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents\Work</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="377487360" data-pct="3.3149" data-curr="11765022720" data-prev="11387535360" data-fdelta="12" data-depth="3" data-path="C:\Users\Demo\Documents">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+360.00 MB</td>
+  <td class="num">+3.31%</td>
+  <td class="num">10.96 GB</td>
+  <td class="num sub">10.61 GB</td>
+  <td class="num sub">+12</td>
+  <td class="num sub">3</td>
+  <td class="mono wrap path">C:\Users\Demo\Documents<span class="dir-note clean-cautious" title="用户文档">文档目录 · 谨慎清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="293601280" data-pct="11.6667" data-curr="2810183680" data-prev="2516582400" data-fdelta="4" data-depth="4" data-path="C:\Users\Demo\.nuget\packages">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+280.00 MB</td>
+  <td class="num">+11.67%</td>
+  <td class="num">2.62 GB</td>
+  <td class="num sub">2.34 GB</td>
+  <td class="num sub">+4</td>
+  <td class="num sub">4</td>
+  <td class="mono wrap path">C:\Users\Demo\.nuget\packages<span class="dir-note clean-cautious" title="解压后的包缓存；删除后需重新还原（离线环境慎删）">NuGet 本机包缓存 · 谨慎清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="293601280" data-pct="11.6667" data-curr="2810183680" data-prev="2516582400" data-fdelta="4" data-depth="3" data-path="C:\Users\Demo\.nuget">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+280.00 MB</td>
+  <td class="num">+11.67%</td>
+  <td class="num">2.62 GB</td>
+  <td class="num sub">2.34 GB</td>
+  <td class="num sub">+4</td>
+  <td class="num sub">3</td>
+  <td class="mono wrap path">C:\Users\Demo\.nuget</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="68157440" data-pct="54.1667" data-curr="193986560" data-prev="125829120" data-fdelta="3" data-depth="10" data-path="C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Code Cache\js">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+65.00 MB</td>
+  <td class="num">+54.17%</td>
+  <td class="num">185.00 MB</td>
+  <td class="num sub">120.00 MB</td>
+  <td class="num sub">+3</td>
+  <td class="num sub">10</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Code Cache\js</td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="68157440" data-pct="54.1667" data-curr="193986560" data-prev="125829120" data-fdelta="3" data-depth="9" data-path="C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Code Cache">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+65.00 MB</td>
+  <td class="num">+54.17%</td>
+  <td class="num">185.00 MB</td>
+  <td class="num sub">120.00 MB</td>
+  <td class="num sub">+3</td>
+  <td class="num sub">9</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Google\Chrome\User Data\Default\Code Cache<span class="dir-note clean-safe" title="已编译的 JavaScript 缓存，可安全清理">Chrome 代码缓存 · 可安全清理</span></td>
+</tr>
+<tr class="row-up" data-status="grown" data-statusrank="0" data-delta="10485760" data-pct="1.3112" data-curr="810199722" data-prev="799713962" data-fdelta="3" data-depth="5" data-path="C:\Users\Demo\AppData\Local\Microsoft">
+  <td><span class="tag tag-up">增长</span></td>
+  <td class="num v-up strong">+10.00 MB</td>
+  <td class="num">+1.31%</td>
+  <td class="num">772.67 MB</td>
+  <td class="num sub">762.67 MB</td>
+  <td class="num sub">+3</td>
+  <td class="num sub">5</td>
+  <td class="mono wrap path">C:\Users\Demo\AppData\Local\Microsoft</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="skips">
+<h2>跳过清单</h2>
+<p class="section-desc">这些目录本次<strong>未被扫描或未被深入</strong>，其占用不计入统计。其中「权限不足」与「IO 错误」的目录已写入数据库，通常下次扫描会直接跳过；但标有 <span class="tag tag-retry">每轮重试</span> 的目录命中<strong>目录用途知识库</strong>（自身是已知目录，或其下含已知目录），<strong>每次扫描都会重新尝试</strong>，以免历史权限记录或默认排除造成长期盲区。如需让全部记录都重新尝试，可用 <span class="mono">--reset-skips</span>；如需关闭该豁免，可用 <span class="mono">--no-knowledge-rescan</span>。</p>
+<div class="empty">本次扫描没有跳过任何目录。</div>
+</section>
+<footer class="page-foot">
+<h3>指标说明</h3>
+<ul class="notes">
+<li><strong>占用</strong>：目录子树的累计字节数，包含所有后代目录与文件；硬链接指向的同一份物理数据只计一次（计入首次出现的路径）。</li>
+<li><strong>变化量</strong> = 本次占用 − 上次占用；<strong>变化率</strong> = 变化量 ÷ 上次占用。上次占用为 0 或不存在时变化率显示为 NEW。</li>
+<li><strong>目录级变化天然重叠</strong>：父目录的变化量已经包含其子目录的变化量，因此榜单中出现嵌套路径属于正常现象，可勾选「仅显示最深层级」查看最细粒度的增长点。</li>
+<li><strong>增长榜默认从第一层子目录开始统计</strong>，根目录自身的变化请查看「各扫描根对比」。</li>
+<li><strong>统计占用 vs 卷已用</strong>：前者是去重后的文件逻辑大小之和，后者是卷已分配的簇数（含不属任何目录的 NTFS 元数据与保留区），因此前者通常小几个百分点，详见「容量口径对照」。</li>
+<li>被排除目录（默认排除清单与 <span class="mono">--exclude</span>）与被跳过的目录，其占用不计入任何祖先目录的累计值。</li>
+</ul>
+<div class="foot-meta">报告生成于 2026-11-21 07:41:44　·　扫描批次 #2　·　上次对比基准：批次 #1（2026-11-21 07:41:04）</div>
+<div class="foot-meta">数据库：C:\DiskGrowthData\disk_growth.db</div>
+</footer>
+
+<script>
+(function(){
+  // ---------- Root tabs: switch between scan roots ----------
+  var tabs = document.querySelectorAll('.root-tab');
+  if (tabs.length) {
+    var panels = document.querySelectorAll('.root-panel');
+    tabs.forEach(function(tab){
+      tab.addEventListener('click', function(){
+        tabs.forEach(function(t){ t.classList.remove('active'); });
+        tab.classList.add('active');
+        var target = tab.getAttribute('data-tab');
+        panels.forEach(function(p){
+          p.classList.toggle('is-hidden', p.getAttribute('data-panel') !== target);
+        });
+      });
+    });
+  }
+
+  // ---------- Detail tables (one per scan root): sorting / search / filter ----------
+  var sections = document.querySelectorAll('.detail-section');
+  sections.forEach(function(section){
+    var table = section.querySelector('table.sortable');
+    if (!table) return;
+    var body = section.querySelector('tbody.dt-body');
+    var ths = table.querySelectorAll('th[data-key]');
+    var state = { key: 'delta', desc: true };
+
+    function num(el, attr){ var v = parseFloat(el.getAttribute('data-' + attr)); return isNaN(v) ? 0 : v; }
+    function cmp(a, b){
+      var k = state.key, r;
+      if (k === 'path') {
+        r = (a.getAttribute('data-path') || '').localeCompare(b.getAttribute('data-path') || '', 'zh-CN');
+      } else if (k === 'status') {
+        // The status column compares the numeric rank (data-statusrank), not data-status:
+        // the latter is the stable key used by the filter buttons
+        r = num(a, 'statusrank') - num(b, 'statusrank');
+      } else {
+        r = num(a, k) - num(b, k);
+      }
+      return state.desc ? -r : r;
+    }
+    ths.forEach(function(th){
+      th.addEventListener('click', function(){
+        var k = th.getAttribute('data-key');
+        if (state.key === k) { state.desc = !state.desc; }
+        else { state.key = k; state.desc = !(k === 'path' || k === 'status'); }
+        ths.forEach(function(x){ x.classList.remove('sorted-asc','sorted-desc'); });
+        th.classList.add(state.desc ? 'sorted-desc' : 'sorted-asc');
+        applyFilter();
+      });
+    });
+
+    // ---------- Detail table: search / status filter / collapse parents ----------
+    var searchBox = section.querySelector('input.dt-search');
+    var leafOnly = section.querySelector('input.dt-leaf');
+    var countInfo = section.querySelector('.dt-count');
+    var statusButtons = section.querySelectorAll('.dt-status .seg-btn');
+    var currentStatus = '';
+    var allRows = Array.prototype.slice.call(body.querySelectorAll('tr'));
+
+    statusButtons.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        statusButtons.forEach(function(b){ b.classList.remove('active'); });
+        btn.classList.add('active');
+        currentStatus = btn.getAttribute('data-status') || '';
+        applyFilter();
+      });
+    });
+
+    function applyFilter(){
+      var kw = (searchBox && searchBox.value ? searchBox.value : '').trim().toLowerCase();
+      var visible = [];
+      allRows.forEach(function(tr){
+        var ok = true;
+        if (kw && (tr.getAttribute('data-path') || '').toLowerCase().indexOf(kw) < 0) ok = false;
+        if (ok && currentStatus && tr.getAttribute('data-status') !== currentStatus) ok = false;
+        tr.style.display = ok ? '' : 'none';
+        if (ok) visible.push(tr);
+      });
+
+      if (leafOnly && leafOnly.checked) {
+        // Hide parents whose children are also in the list, keeping only the finest changes
+        var paths = visible.map(function(tr){ return (tr.getAttribute('data-path') || '').toLowerCase(); });
+        visible.forEach(function(tr){
+          var self = (tr.getAttribute('data-path') || '').toLowerCase() + '\\';
+          var covered = paths.some(function(other){
+            return other !== self.slice(0, -1) && other.indexOf(self) === 0;
+          });
+          if (covered) tr.style.display = 'none';
+        });
+      }
+
+      var shown = visible.filter(function(tr){ return tr.style.display !== 'none'; }).length;
+      if (countInfo) countInfo.textContent = '显示 ' + shown + ' / ' + allRows.length + ' 行';
+
+      // Sort (re-ordering the whole visible set)
+      visible.sort(cmp).forEach(function(tr){ body.appendChild(tr); });
+      allRows.filter(function(tr){ return visible.indexOf(tr) < 0; }).forEach(function(tr){ body.appendChild(tr); });
+    }
+
+    if (searchBox) searchBox.addEventListener('input', applyFilter);
+    if (leafOnly) leafOnly.addEventListener('change', applyFilter);
+    window.__dtApply = applyFilter;
+    applyFilter();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DiskGrowthMonitor — sample reports</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #e2e7ee;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --brand: #2563eb;
+    --brand-dark: #1d4ed8;
+    --up: #d92b2b;
+    --down: #1a8a4a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 20px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.65 "Segoe UI", -apple-system, "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.4px; }
+  .tagline { color: var(--muted); font-size: 16px; margin: 0 0 4px; }
+  .tagline-zh { color: var(--muted); font-size: 14px; margin: 0 0 32px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+  }
+  h2 { font-size: 15px; margin: 0 0 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  p { margin: 0 0 12px; }
+  p:last-child { margin-bottom: 0; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+  a.btn {
+    display: inline-block;
+    padding: 11px 20px;
+    border-radius: 7px;
+    background: var(--brand);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+    border: 1px solid var(--brand);
+    transition: background .15s;
+  }
+  a.btn:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
+  a.btn.ghost { background: #fff; color: var(--brand); }
+  a.btn.ghost:hover { background: #eef4ff; }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin-bottom: 7px; }
+  code {
+    background: #eef1f6;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font: 13px/1.5 Consolas, "Courier New", monospace;
+  }
+  .up { color: var(--up); font-weight: 600; }
+  .down { color: var(--down); font-weight: 600; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 14px; }
+  footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 34px; }
+  footer a { color: var(--brand); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>DiskGrowthMonitor</h1>
+  <p class="tagline">See what <em>grew</em> since last week — not just what is big now.</p>
+  <p class="tagline-zh">看见「这周什么长大了」，而不只是「现在什么大」。</p>
+
+  <div class="card">
+    <h2>What this is</h2>
+    <p>A Windows command-line tool that snapshots per-directory disk usage into SQLite, diffs every run
+       against the previous snapshot, and turns the result into one self-contained HTML report.</p>
+    <p>WizTree and TreeSize answer <em>“what is big right now”</em>. This answers the question you actually
+       ask when your drive fills up: <strong>“what grew, and is it safe to delete?”</strong></p>
+    <ul>
+      <li><span class="up">Growth / shrink</span> ranked per directory, with an annotated knowledge base
+          of 66 known directories telling you whether each one is safe to clean.</li>
+      <li>Full scan of a system drive in <strong>~20 s</strong>; an unchanged root reuses its previous
+          snapshot and finishes in <strong>~1.6 s</strong>.</li>
+      <li>Read-only. It never deletes anything.</li>
+    </ul>
+    <div class="btn-row">
+      <a class="btn" href="report-en.html">View sample report (English)</a>
+      <a class="btn ghost" href="report-zh.html">查看中文示例报告</a>
+    </div>
+    <p class="note">The sample reports below were generated from a synthetic demo tree (about 2,700
+      directories / 3,100 files / 328 GB), so no real machine data is shown. The layout, numbers and
+      wording are exactly what the tool produces.</p>
+  </div>
+
+  <div class="card">
+    <h2>What the report shows</h2>
+    <ul>
+      <li><strong>Overview</strong> — total usage, change versus the previous run, directory and file counts,
+          skipped items.</li>
+      <li><strong>Fastest-growing directories</strong> — leaf-level by default, so one big change does not
+          occupy every row through its ancestors.</li>
+      <li><strong>Safe-to-clean directories</strong> — knowledge-base matches with a cleanability level.</li>
+      <li><strong>Volume reconciliation</strong> — why the measured total is a few percent below the
+          “used space” Windows reports.</li>
+      <li><strong>Detail table</strong> — search by path, sort by any column, filter by status,
+          toggle “deepest level only”.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Source</h2>
+    <p>Source code, full documentation and release downloads:</p>
+    <div class="btn-row">
+      <a class="btn ghost" href="https://github.com/winrich/DiskGrowthMonitor">github.com/winrich/DiskGrowthMonitor</a>
+    </div>
+    <p class="note">Single Windows executable, .NET Framework 4.5 — no runtime to install.
+      MIT licensed.</p>
+  </div>
+
+  <footer>
+    DiskGrowthMonitor · <a href="https://github.com/winrich/DiskGrowthMonitor">GitHub</a>
+  </footer>
+
+</div>
+</body>
+</html>

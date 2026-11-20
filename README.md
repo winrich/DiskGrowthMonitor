@@ -1,12 +1,42 @@
-# DiskGrowthMonitor · Disk Space Growth Monitor
+# DiskGrowthMonitor
 
 **English** | [简体中文](README_zh.md)
 
-Recursively scans per-directory disk usage → stores it in a local SQLite database → on the next run, compares it **directory by directory** against the previous snapshot → reports the fastest-growing and most-shrinking directories and generates a self-contained HTML report. Known directories (browser caches, system temp files, logs, crash dumps, application data, …) are annotated with their **purpose and whether they are safe to delete**.
+### "Why is my C: drive full again?"
 
-> It answers exactly three questions: **what is eating the disk, how much did it grow, and can it be deleted?**
+One command answers it with a **diff, not a guess**.
 
-A single Windows executable with zero prerequisites — copy the folder and run. Suitable for tracking disk usage over time from Task Scheduler, or for one-off hunts for "why is C: full again".
+[![Sample report — fastest-growing directories, each annotated with whether it is safe to delete](docs/images/report-growth.png)](https://winrich.github.io/DiskGrowthMonitor/)
+
+**[▶ Open a live sample report](https://winrich.github.io/DiskGrowthMonitor/)**&nbsp;&nbsp;·&nbsp;&nbsp;[中文示例报告](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)
+
+---
+
+WizTree and TreeSize tell you what is big **right now**. DiskGrowthMonitor tells you what **grew since last week** — and, for every directory it recognises, whether it is **safe to delete**.
+
+```console
+> DiskGrowthMonitor.exe -d C           # first run — records a baseline
+> DiskGrowthMonitor.exe -d C --open    # a week later — here is what grew
+```
+
+- **20 s** — full scan of a system drive holding ~190k directories
+- **1.6 s** — a later run when nothing changed (NTFS USN journal reuse)
+- **0** — files deleted, ever. The tool is strictly read-only
+- **0 prerequisites** — .NET Framework 4.5 ships with Windows 7 SP1 / Server 2012+
+
+### Why not just use WizTree?
+
+Because it answers a different question.
+
+| The question | WizTree / TreeSize / MangoDisk | DiskGrowthMonitor |
+|---|---|---|
+| What is **big right now** | ✅ treemap, instant (reads the MFT) | ✅ (slower — but see the next row) |
+| What **grew since last week** | ❌ no history, only a snapshot | ✅ per-directory diff, ranked by change |
+| Is this folder **safe to delete** | ❌ leaves you to guess | ✅ 66-entry knowledge base, annotated in place |
+| Hard-linked trees (`WinSxS`, …) | partly double-counted | ✅ deduplicated by file ID |
+| Unattended / Task Scheduler | varies | ✅ CLI, exit codes, single HTML artifact |
+
+A disk filling up is a **change over time**, and a treemap cannot show change — only a stored baseline can. That is the entire point of this tool.
 
 ---
 
@@ -72,6 +102,23 @@ Permissions are the largest source of deviation: running without elevation under
 
 ## Quick start
 
+### Just run it
+
+Download `DiskGrowthMonitor_x64.zip` from the [latest release](../../releases/latest), extract it to any **writable** folder (not `C:\Program Files`), then:
+
+```console
+DiskGrowthMonitor.exe -d C          # 1) establish the baseline
+DiskGrowthMonitor.exe -d C --open   # 2) later — the growth report opens in your browser
+```
+
+> **You need two runs before any growth data appears.** The first run only establishes a baseline; the second is what shows "what grew".
+>
+> **Note**: the database defaults to `<exe directory>\disk_growth.db` (relocatable via `--data-dir`), so Debug / Release and every copied folder each get their own database. Stick to one copy to avoid comparing two different datasets.
+>
+> Estimated time: ~20 s for a full system drive. Running as administrator is recommended — it removes access-denied gaps and enables USN incremental reuse, which is what makes the second run take 1.6 s instead of 20 s.
+
+### Build from source
+
 ```bash
 # 1) Build (single target: net45)
 dotnet build -c Release
@@ -83,10 +130,6 @@ DiskGrowthMonitor.exe -d ALL
 # 3) Run again later — get the growth report
 DiskGrowthMonitor.exe -d ALL --open
 ```
-
-> **You need two runs before any growth data appears.** The first run only establishes a baseline; the second is what shows "what grew".
->
-> **Note**: the database defaults to `<exe directory>\disk_growth.db` (relocatable via `--data-dir`), so Debug / Release and every copied folder each get their own database. Stick to one copy to avoid comparing two different datasets.
 
 ### Deploying to a target machine
 
@@ -389,7 +432,9 @@ DiskGrowthMonitor/
 
 ## Report contents
 
-This repository ships source only and no sample reports, since report figures are specific to the machine that produced them. Two runs give you a comparison report; its fixed structure is:
+**[▶ Open a live sample report](https://winrich.github.io/DiskGrowthMonitor/)** — generated from a synthetic demo tree (~2,700 directories / 3,100 files / 328 GB), so no real machine data appears on the page; the layout, numbers and wording are exactly what the tool produces.
+
+Two runs give you a comparison report; its fixed structure is:
 
 | Section | First run | Every run after |
 |---|---|---|
