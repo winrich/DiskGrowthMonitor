@@ -821,7 +821,7 @@ internal static class Program
             db.InsertGrowthHistory(run.Id, analysis.GrowthTop);
         Console.WriteLine();
 
-        PrintConsoleSummary(analysis, isFirstRun, opt.MinBytes);
+        PrintConsoleSummary(analysis, isFirstRun, opt.MinBytes, opt.ConsoleAllLevels);
 
         if (opt.NoReport)
         {
@@ -1174,7 +1174,7 @@ internal static class Program
 
     // ---------------------------------------------------------------- 输出
 
-    private static void PrintConsoleSummary(AnalysisResult a, bool isFirstRun, long minBytes)
+    private static void PrintConsoleSummary(AnalysisResult a, bool isFirstRun, long minBytes, bool allLevels)
     {
         Console.WriteLine(ConsoleStyle.Muted(Lang.T("   各扫描根", "   Per-root comparison")));
         Console.WriteLine(ConsoleStyle.Muted("     "
@@ -1216,16 +1216,32 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine(Lang.F("   增长最快的目录（前 {0} / 共 {1}）",
-                                 "   Fastest-growing directories (top {0} / {1})",
-                                 Math.Min(10, a.GrowthTop.Count), FormatUtil.Count(a.GrowthTop.Count)));
-        if (a.GrowthTop.Count == 0)
+        // 控制台榜单默认只显示叶子级目录（有子目录的父级不进榜）：
+        // 增长是按子树累计的，同一笔增长会让各级祖先重复占位，控制台只有 10 行，很容易被祖先刷满。
+        // 叶子级一条都不达标时（变化落在父目录自身的直接文件上）回退为全部层级，并打印说明。
+        var list = allLevels ? a.GrowthTop : a.ConsoleGrowthTop;
+        bool leafFallback = !allLevels && a.ConsoleLeafFallbackUsed;
+        // 标题只在「确实做了叶子过滤」时标注叶子级；显式用 --console-all-levels 或已降级时都按全层级措辞，
+        // 否则会出现「--console-all-levels 却写着叶子级」的自相矛盾（自验证时发现）。
+        bool leafScope = !allLevels && !leafFallback;
+
+        Console.WriteLine(Lang.F(
+            leafScope ? "   增长最快的目录（叶子级，前 {0} / 共 {1}）"
+                      : "   增长最快的目录（前 {0} / 共 {1}）",
+            leafScope ? "   Fastest-growing directories (leaf-level, top {0} / {1})"
+                      : "   Fastest-growing directories (top {0} / {1})",
+            Math.Min(10, list.Count), FormatUtil.Count(list.Count)));
+        if (list.Count == 0)
         {
             Console.WriteLine(Lang.T("  没有目录的增长量超过设定阈值。",
                                      "  No directory exceeded the configured growth threshold."));
         }
         else
         {
+            if (leafFallback)
+                Console.WriteLine(ConsoleStyle.Muted(Lang.T(
+                    "  ※ 没有叶子级目录的增量达到阈值（变化集中在父目录自身的文件上），以下为全部层级",
+                    "  * No leaf-level directory reached the threshold (growth sits in parent directories' own files); showing all levels")));
             if (a.GrowthFallbackUsed)
                 Console.WriteLine(ConsoleStyle.Muted(Lang.F(
                     "  ※ 无目录达到 {0} 阈值，以下按未应用阈值的变化量降序（报告中有标注）",
@@ -1236,7 +1252,7 @@ internal static class Program
                 + FormatUtil.CellRight(Lang.T("变化率", "Change"), 10)
                 + FormatUtil.CellRight(Lang.T("本次占用", "Current"), 11)
                 + "  " + Lang.T("路径", "Path")));
-            foreach (var it in a.GrowthTop.Take(10))
+            foreach (var it in list.Take(10))
             {
                 string rate = (double.IsNaN(it.GrowthPercent) || double.IsInfinity(it.GrowthPercent))
                     ? Lang.T("新增", "new")

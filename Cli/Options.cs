@@ -53,6 +53,13 @@ public sealed class Options
     public bool NoDedup { get; set; }
 
     /// <summary>
+    /// 控制台增长榜显示全部层级（默认只显示叶子级目录）。
+    /// 增长量按子树累计，同一笔增长会让各级祖先重复占位；控制台只有 10 行，默认剔掉有子目录的父级。
+    /// 打开此开关即回到旧行为，用于对照或需要看上层汇总时使用。
+    /// </summary>
+    public bool ConsoleAllLevels { get; set; }
+
+    /// <summary>
     /// 关闭「以管理员身份自举」。
     /// 默认行为：本次确实要扫描且当前进程非管理员时，尝试用 UAC 重新以管理员身份启动自己
     /// —— 因为读 USN 变更日志（打开 \\.\X: 卷设备）与 MFT 目录数估算都要求管理员权限，
@@ -252,6 +259,9 @@ public sealed class Options
                 case "--no-dedup":
                     o.NoDedup = true;
                     break;
+                case "--console-all-levels":
+                    o.ConsoleAllLevels = true;
+                    break;
                 case "--no-elevate":
                     o.NoElevate = true;
                     break;
@@ -405,6 +415,8 @@ public sealed class Options
         sb.AppendLine("      --detail-min-mb <N>     详细明细表最小变化量，默认 1 MB");
         sb.AppendLine("  -m, --min-mb <N>            只报告增长量超过 N MB 的目录，默认 100");
         sb.AppendLine("  -p, --min-percent <N>       只报告增长百分比超过 N% 的目录，默认 0");
+        sb.AppendLine("      --console-all-levels    控制台增长榜显示全部层级（默认只显示叶子级目录，");
+        sb.AppendLine("                              即自身没有子目录的末级目录，避免各级祖先重复占位）");
         sb.AppendLine();
         sb.AppendLine("排除与跳过：");
         sb.AppendLine("  -x, --exclude <路径前缀>    额外排除目录（可多次指定）");
@@ -485,6 +497,8 @@ public sealed class Options
         sb.AppendLine("      --detail-min-mb <N>     Minimum change to appear in the detail table, default 1 MB");
         sb.AppendLine("  -m, --min-mb <N>            Only report directories growing by more than N MB, default 100");
         sb.AppendLine("  -p, --min-percent <N>       Only report directories growing by more than N%, default 0");
+        sb.AppendLine("      --console-all-levels    Show all levels in the console ranking (by default only leaf-level");
+        sb.AppendLine("                              directories are listed, so ancestor paths do not fill every row)");
         sb.AppendLine();
         sb.AppendLine("Exclusions and skips:");
         sb.AppendLine("  -x, --exclude <prefix>      Extra directory prefix to exclude (repeatable)");

@@ -63,6 +63,22 @@ public sealed class AnalysisResult
 
     /// <summary>增长榜在应用阈值后为空、已自动降级为「未应用阈值」时的提示。</summary>
     public bool GrowthFallbackUsed { get; set; }
+
+    /// <summary>
+    /// 控制台增长榜专用：只含叶子级目录（<c>dir_count = 0</c>，即没有子目录）。
+    /// 与 <see cref="GrowthTop"/> 分开查询的原因：GrowthTop 是全层级 top N，全盘场景下
+    /// 前 N 常被同一笔增长的各级祖先路径占满（Users → Demo → AppData → … → FileStorage），
+    /// 控制台只显示前 10 行，等于真正该看的末级目录被祖先噪声挤掉；从中筛叶子又会所剩无几。
+    /// HTML 报告与增长历史表仍使用 GrowthTop，不受此项影响。
+    /// </summary>
+    public List<GrowthItem> ConsoleGrowthTop { get; } = new();
+
+    /// <summary>
+    /// 控制台榜单的叶子级过滤已降级为「全部层级」：叶子级没有达标目录时置 true，
+    /// 控制台据此打印一行说明，避免让人误以为磁盘没有变化。
+    /// </summary>
+    public bool ConsoleLeafFallbackUsed { get; set; }
+
     /// <summary>详细明细在应用阈值后为空、已自动降级为「未应用阈值」时的提示。</summary>
     public bool DetailFallbackUsed { get; set; }
     /// <summary>是否存在任何体积减小的目录（用于给出准确的空状态说明）。</summary>
@@ -133,6 +149,28 @@ public sealed class GrowthAnalyzer
             }
             result.GrowthTop.AddRange(growth);
 
+            // 控制台增长榜：只取叶子级目录（dir_count = 0，即自身没有子目录）。
+            // 全盘扫描时 GrowthTop 的前 N 会被同一笔增长的各级祖先占满（实测 6 行都是同一笔 +2.36 GB），
+            // 而控制台只显示前 10 行，真正该看的末级目录一条都进不来。单独按叶子条件查一次即可。
+            if (!isFirstRun)
+            {
+                var leaf = QueryGrowth(top, minBytes, minPercent, null, leafOnly: true);
+                if (leaf.Count == 0)
+                    leaf = QueryGrowth(top, 1, 0, null, leafOnly: true);   // 阈值降级，与 GrowthTop 口径一致
+
+                if (leaf.Count == 0)
+                {
+                    // 叶子级一条都不达标（变化落在父目录自身的直接文件上）：回退显示全部层级并打说明。
+                    // 不能让控制台空着，否则会被误读成「磁盘没有变化」。
+                    result.ConsoleGrowthTop.AddRange(growth);
+                    result.ConsoleLeafFallbackUsed = growth.Count > 0;
+                }
+                else
+                {
+                    result.ConsoleGrowthTop.AddRange(leaf);
+                }
+            }
+
             result.ShrinkTop.AddRange(QueryShrinks(top));
             result.NewTop.AddRange(QueryByKind("NEW", top));
             result.RemovedTop.AddRange(QueryByKind("REMOVED", top));
@@ -202,7 +240,7 @@ public sealed class GrowthAnalyzer
             DROP TABLE IF EXISTS temp.{TempTable};
 
             CREATE TEMP TABLE {TempTable} AS
-            SELECT path, root_key, prev_bytes, curr_bytes, file_delta, kind, depth,
+            SELECT path, root_key, prev_bytes, curr_bytes, file_delta, kind, depth, dir_count,
                    (CASE WHEN curr_bytes IS NULL THEN 0 ELSE curr_bytes END) - IFNULL(prev_bytes, 0) AS delta
             FROM (
                 SELECT c.path                                          AS path,
@@ -211,7 +249,8 @@ public sealed class GrowthAnalyzer
                        c.size_bytes                                    AS curr_bytes,
                        (c.file_count - IFNULL(p.file_count, 0))        AS file_delta,
                        CASE WHEN p.path IS NULL THEN 'NEW' ELSE 'BOTH' END AS kind,
-                       c.depth                                         AS depth
+                       c.depth                                         AS depth,
+                       c.dir_count                                     AS dir_count
                 FROM dir_snapshots c
                 LEFT JOIN dir_snapshots_prev p ON p.path = c.path
                 WHERE c.root_key IN ({filter})
@@ -224,7 +263,8 @@ public sealed class GrowthAnalyzer
                        NULL,
                        -p.file_count,
                        'REMOVED',
-                       p.depth
+                       p.depth,
+                       p.dir_count
                 FROM dir_snapshots_prev p
                 WHERE p.root_key IN ({filter})
                   AND NOT EXISTS (SELECT 1 FROM dir_snapshots c WHERE c.path = p.path)
@@ -234,6 +274,7 @@ public sealed class GrowthAnalyzer
             CREATE INDEX temp.idx_cmp_delta ON {TempTable}(delta);
             CREATE INDEX temp.idx_cmp_kind  ON {TempTable}(kind);
             CREATE INDEX temp.idx_cmp_depth ON {TempTable}(depth);
+            CREATE INDEX temp.idx_cmp_leaf  ON {TempTable}(dir_count, delta);
             """;
         foreach (var param in p) cmd.Parameters.Add(param);
         cmd.ExecuteNonQuery();
@@ -446,8 +487,11 @@ public sealed class GrowthAnalyzer
     /// <summary>
     /// 增长榜：按增长量降序。排除 depth=0 的根节点，避免根目录抢占全部位置。
     /// <paramref name="rootKey"/> 非 null 时只统计该扫描根（报告按盘切换用）。
+    /// <paramref name="leafOnly"/> 为 true 时只取叶子级目录（<c>dir_count = 0</c>，即自身没有子目录），
+    /// 供控制台使用 —— 有子目录的父级不进榜，避免各级祖先把同一笔增长重复占位。
     /// </summary>
-    private List<GrowthItem> QueryGrowth(int top, long minBytes, double minPercent, string? rootKey = null)
+    private List<GrowthItem> QueryGrowth(int top, long minBytes, double minPercent,
+                                         string? rootKey = null, bool leafOnly = false)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = $"""
@@ -458,6 +502,7 @@ public sealed class GrowthAnalyzer
               AND delta > 0
               AND delta >= $minBytes
               AND (IFNULL(prev_bytes, 0) = 0 OR delta * 100.0 / prev_bytes >= $minPct)
+              {(leafOnly ? "AND dir_count = 0" : "")}
               {(rootKey != null ? "AND root_key = $rk" : "")}
             ORDER BY delta DESC
             LIMIT $n;
