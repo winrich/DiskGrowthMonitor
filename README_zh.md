@@ -6,7 +6,7 @@
 
 一条命令给你**差异对比**，而不是一个猜测。
 
-[![示例报告 —— 增长最快的目录，每条都标注了能不能删](docs/images/report-growth.png)](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)
+![示例报告 —— 增长最快的目录，每条都标注了能不能删](docs/images/report-growth.png)
 
 **[▶ 打开在线示例报告](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)**&nbsp;&nbsp;·&nbsp;&nbsp;[English sample](https://winrich.github.io/DiskGrowthMonitor/report-en.html)
 

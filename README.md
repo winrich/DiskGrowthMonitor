@@ -4,9 +4,9 @@
 
 ### "Why is my C: drive full again?"
 
-One command answers it with a **diff, not a guess**.
+**One command answers it with a diff, not a guess.**
 
-[![Sample report — fastest-growing directories, each annotated with whether it is safe to delete](docs/images/report-growth.png)](https://winrich.github.io/DiskGrowthMonitor/)
+![Sample report — fastest-growing directories, each annotated with whether it is safe to delete](docs/images/report-growth.png)
 
 **[▶ Open a live sample report](https://winrich.github.io/DiskGrowthMonitor/)**&nbsp;&nbsp;·&nbsp;&nbsp;[中文示例报告](https://winrich.github.io/DiskGrowthMonitor/report-zh.html)
 
