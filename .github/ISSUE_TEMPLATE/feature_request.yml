@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a capability, a new option, or a change in behaviour
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The scope is intentionally narrow: scan per-directory usage, keep the previous
+        snapshot, show the difference. Proposals that make the tool a general disk
+        analyser (treemaps, file-level browsers, cleanup actions) are usually out of scope —
+        WizTree already does that well.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the tool makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What it would look like from the command line or in the report.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Scan accuracy / coverage
+        - Performance
+        - HTML report
+        - Command line
+        - Knowledge base (new directory entries)
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing switches, external tools, or workarounds you tried.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This can work on .NET Framework 4.5 / Windows Server 2012 without new prerequisites.
+          required: true

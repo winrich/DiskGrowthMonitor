@@ -1,0 +1,81 @@
+name: Bug report
+description: A crash, a wrong number, or a scan that skipped something it should have seen
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if the total is a few percent lower than what Explorer reports,
+        that is expected — see the **volume reconciliation** block in the report and the
+        FAQ. A much larger gap is almost always permissions; try an elevated run, then
+        `--reset-skips`.
+
+  - type: input
+    id: command
+    attributes:
+      label: Command line
+      description: The exact command you ran, including all switches.
+      placeholder: DiskGrowthMonitor.exe -d C --open
+    validations:
+      required: true
+
+  - type: textarea
+    id: showenv
+    attributes:
+      label: Output of --show-env
+      description: Paste the whole block. It records the OS, media type, chosen engine and parallelism.
+      render: console
+      placeholder: |
+        Run `DiskGrowthMonitor.exe --show-env` and paste the output here.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: elevated
+    attributes:
+      label: Running as administrator?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      placeholder: Windows 11 23H2, build 22631
+    validations:
+      required: true
+
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What happened, and what you expected
+      description: For wrong numbers, include the expected and the reported values.
+    validations:
+      required: true
+
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Report excerpt or log
+      description: |
+        For a number that looks wrong, paste the volume reconciliation block and the skip
+        list from the HTML report. Do **not** attach disk_growth.db — it contains a full
+        path listing of your machine.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I checked the FAQ and the volume reconciliation block before filing.
+          required: true
+        - label: This report contains no personal paths or other sensitive data (or I have redacted them).
+          required: true

@@ -92,10 +92,20 @@
     <div class="btn-row">
       <a class="btn" href="report-en.html">View sample report (English)</a>
       <a class="btn ghost" href="report-zh.html">查看中文示例报告</a>
+      <a class="btn ghost" href="https://github.com/winrich/DiskGrowthMonitor/releases/latest">Download (Windows x64)</a>
     </div>
     <p class="note">The sample reports below were generated from a synthetic demo tree (about 2,700
       directories / 3,100 files / 328 GB), so no real machine data is shown. The layout, numbers and
       wording are exactly what the tool produces.</p>
+  </div>
+
+  <div class="card">
+    <h2>How it works</h2>
+    <p>Two scans, two snapshots, one diff. The first snapshot is kept precisely because a
+       treemap can only ever show the second one.</p>
+    <img src="images/how-it-works.svg"
+         alt="Two scans produce two SQLite snapshots; their per-directory difference becomes a ranked HTML report"
+         style="width:100%;height:auto;border:1px solid var(--border);border-radius:8px;margin-top:4px">
   </div>
 
   <div class="card">

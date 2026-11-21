@@ -2,6 +2,8 @@
 
 **English** | [简体中文](README_zh.md)
 
+![Windows 7 SP1+ / 10 / 11](https://img.shields.io/badge/Windows-7%20SP1%2B%20%2F%2010%20%2F%2011-0078D4?style=flat-square) ![.NET Framework 4.5 — nothing to install](https://img.shields.io/badge/.NET%20Framework-4.5%20%C2%B7%20nothing%20to%20install-512BD4?style=flat-square) ![x64 only](https://img.shields.io/badge/arch-x64%20only-6E7781?style=flat-square) ![Deletes nothing](https://img.shields.io/badge/deletes%20files-never-2DA44E?style=flat-square) ![MIT](https://img.shields.io/badge/license-MIT-2DA44E?style=flat-square)
+
 ### "Why is my C: drive full again?"
 
 **One command answers it with a diff, not a guess.**
@@ -37,6 +39,29 @@ Because it answers a different question.
 | Unattended / Task Scheduler | varies | ✅ CLI, exit codes, single HTML artifact |
 
 A disk filling up is a **change over time**, and a treemap cannot show change — only a stored baseline can. That is the entire point of this tool.
+
+---
+
+<details>
+<summary><b>Contents</b></summary>
+
+- [Features](#features)
+- [Performance](#performance)
+- [Quick start](#quick-start)
+- [Command-line reference](#command-line-reference)
+- [How it works](#how-it-works)
+- [Environment and adaptive strategy](#environment-and-adaptive-strategy)
+- [HTML report](#html-report)
+- [Database schema](#database-schema)
+- [FAQ](#faq)
+- [Project layout](#project-layout)
+- [Technology choices](#technology-choices)
+- [Report contents](#report-contents)
+- [Related documents](#related-documents)
+- [Contributing](#contributing)
+- [License](#license)
+
+</details>
 
 ---
 
@@ -104,7 +129,7 @@ Permissions are the largest source of deviation: running without elevation under
 
 ### Just run it
 
-Download `DiskGrowthMonitor_x64.zip` from the [latest release](../../releases/latest), extract it to any **writable** folder (not `C:\Program Files`), then:
+Download `DiskGrowthMonitor_x64_v1.0.0.zip` from the [latest release](../../releases/latest), extract it into a **writable** folder of its own (not `C:\Program Files` — the database and the reports are written next to the executable), then:
 
 ```console
 DiskGrowthMonitor.exe -d C          # 1) establish the baseline
@@ -254,6 +279,8 @@ DiskGrowthMonitor.exe --show-env
 
 ## How it works
 
+![Two scans produce two SQLite snapshots; their per-directory difference becomes a ranked HTML report](docs/images/how-it-works.svg)
+
 **Single-pass recursion with bottom-up accumulation.** Every directory is enumerated exactly once: file sizes are summed as they are seen, subdirectories are recursed into and their subtree totals added, and the directory's own row is written on the way back. Each file-system entry is therefore visited **exactly once**, avoiding the O(depth × file count) blow-up of summing each directory independently.
 
 **File IDs come back with the directory entry, so deduplication no longer opens a handle per file.** Hard-link deduplication keys on `(volume, file ID)`. The default NT enumeration path (`extd` / `both`) returns that ID alongside each entry, so deduplication costs a single hash insert; only the `win32` fallback engine needs an extra handle per non-empty file. The dedup set is isolated per **volume serial number** (one physical volume can carry several drive letters, and grouping by letter would silently miss duplicates), then sharded with per-shard locks.
@@ -296,6 +323,8 @@ DiskGrowthMonitor.exe --show-env      # probe and print only; no scan, no databa
 ## HTML report
 
 The report is a **self-contained single file** (inlined CSS/JS, no external dependencies, opens offline, safe to forward) with a light theme.
+
+![Report overview — KPI cards, change scale, per-root reconciliation](docs/images/report-overview.png)
 
 - **Overview**: KPI cards (total usage, change vs. last run, directories, files, elapsed time, skipped), change scale (grown / shrunk / new / removed) and the configuration used for this scan
 - **Safe-to-clean directories**: matching knowledge-base entries whose cleanability is *safe*, with a total
@@ -455,6 +484,16 @@ The report is a single self-contained HTML file (inlined CSS/JS, no external dep
 - [`README_zh.md`](README_zh.md) — this document in Simplified Chinese
 - [`UserGuide_EN.md`](UserGuide_EN.md) — end-user manual (setup, running, reading the report, full option list, troubleshooting)
 - [`使用说明.md`](使用说明.md) — the same manual in Simplified Chinese
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed in each version
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — build, test and pull-request rules
+
+---
+
+## Contributing
+
+Bug reports, corrections to the documentation and pull requests are all welcome. Open an issue before working on anything that touches the scanner or the database schema: several existing choices are constrained in ways the source does not advertise — a single `net45` target so it still runs on Server 2012, x64 only, and nothing newer than a Windows 8 API. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the build and verification steps.
+
+The most useful bug report contains the command line you ran, the output of `--show-env`, and the `skip_paths` section of the report if numbers look wrong.
 
 ---
 

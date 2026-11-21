@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Usage, options and FAQ
+    url: https://github.com/winrich/DiskGrowthMonitor/blob/main/README.md
+    about: Command-line reference, the accounting rules behind the numbers, and the FAQ.
+  - name: Why is the total smaller than "used space"?
+    url: https://github.com/winrich/DiskGrowthMonitor/blob/main/README.md#accounting-for-the-numbers
+    about: Read this before reporting a number as wrong — a 2-4% gap is structural.

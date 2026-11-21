@@ -2,6 +2,8 @@
 
 [**English**](README.md) | 简体中文
 
+![Windows 7 SP1+ / 10 / 11](https://img.shields.io/badge/Windows-7%20SP1%2B%20%2F%2010%20%2F%2011-0078D4?style=flat-square) ![.NET Framework 4.5 —— 免安装](https://img.shields.io/badge/.NET%20Framework-4.5%20%C2%B7%20nothing%20to%20install-512BD4?style=flat-square) ![仅 x64](https://img.shields.io/badge/arch-x64%20only-6E7781?style=flat-square) ![不删除任何文件](https://img.shields.io/badge/deletes%20files-never-2DA44E?style=flat-square) ![MIT](https://img.shields.io/badge/license-MIT-2DA44E?style=flat-square)
+
 ### 「C 盘怎么又满了？」
 
 一条命令给你**差异对比**，而不是一个猜测。
@@ -37,6 +39,29 @@ WizTree、TreeSize 告诉你**现在什么大**；DiskGrowthMonitor 告诉你**�
 | 无人值守 / 定时任务 | 视情况 | ✅ 纯命令行、退出码、单文件报告 |
 
 磁盘被写满是一个**随时间发生的变化**，树图只能显示某一刻，看不见变化 —— 只有存下基准才看得见。这就是这个工具存在的理由。
+
+---
+
+<details>
+<summary><b>目录</b></summary>
+
+- [特性](#特性)
+- [性能](#性能)
+- [快速开始](#快速开始)
+- [命令行参数](#命令行参数)
+- [工作原理](#工作原理)
+- [环境与自适应策略](#环境与自适应策略)
+- [HTML 报告](#html-报告)
+- [数据库结构](#数据库结构)
+- [常见问题](#常见问题)
+- [项目结构](#项目结构)
+- [技术选型](#技术选型)
+- [报告内容](#报告内容)
+- [相关文档](#相关文档)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
+
+</details>
 
 ---
 
@@ -104,7 +129,7 @@ WizTree、TreeSize 告诉你**现在什么大**；DiskGrowthMonitor 告诉你**�
 
 ### 直接用现成的
 
-从[最新发布](../../releases/latest)下载 `DiskGrowthMonitor_x64.zip`，解压到任意**可写**目录（不要放 `C:\Program Files`），然后：
+从[最新发布](../../releases/latest)下载 `DiskGrowthMonitor_x64_v1.0.0.zip`，解压到一个**可写**的独立目录（不要放 `C:\Program Files` —— 数据库和报告都写在 exe 旁边），然后：
 
 ```console
 DiskGrowthMonitor.exe -d C          # 1) 建立基准
@@ -254,6 +279,8 @@ DiskGrowthMonitor.exe --show-env
 
 ## 工作原理
 
+![两轮扫描产生两份 SQLite 快照，两者的逐目录差值变成一份排序好的 HTML 报告](docs/images/how-it-works.svg)
+
 **单遍递归 + 自底向上累加。** 每个目录只枚举一次：遇到文件累加大小，遇到子目录递归取回子树统计后相加，返回时再写入本目录记录。每个文件系统条目**恰好访问一次**，避免了「逐目录各自求和」的 O(深度 × 文件数) 重复遍历。
 
 **标识随目录项直接返回，去重不再逐文件开句柄。** 硬链接去重的钥匙是文件的唯一标识 `(卷, 文件标识)`。默认的 NT 枚举路径（`extd` / `both`）在返回目录项的同时就带上了文件标识，因此去重只剩一次哈希插入；只有 `win32` 兼容档才需要为每个非空文件额外开一次句柄。去重集合按**卷序列号**隔离（同一物理卷可挂多个盘符，按盘符分组会漏去重），卷内再分片加锁。
@@ -296,6 +323,8 @@ DiskGrowthMonitor.exe --show-env      # 只探测并打印，不扫描、不写�
 ## HTML 报告
 
 报告为**自包含单文件**（内联 CSS/JS，无外部依赖，可离线打开、可直接发送），采用浅色主题。
+
+![报告概览 —— KPI 卡片、变化规模、按盘对账](docs/images/report-overview.png)
 
 - **概览**：KPI 卡片（总占用、相比上次变化、目录数、文件数、耗时、跳过项）、变化规模（增大 / 减小 / 新增 / 消失）、本次扫描配置
 - **可安全清理的目录**：命中知识库且可清理性为「安全」的目录清单与合计
@@ -455,6 +484,16 @@ DiskGrowthMonitor/
 - [`使用说明.md`](使用说明.md) —— 面向使用者的操作手册（准备、运行、报告怎么看、参数速查、常见问题）
 - [`README.md`](README.md) —— 本文档的英文版
 - [`UserGuide_EN.md`](UserGuide_EN.md) —— 英文版操作手册
+- [`CHANGELOG.md`](CHANGELOG.md) —— 各版本的变更记录
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) —— 构建、验证与提交规范
+
+---
+
+## 参与贡献
+
+欢迎提交缺陷、文档纠错和代码合并请求。涉及扫描器或数据库结构的改动，请先开一个 issue 说明：有几处现有实现受制于源码里看不出来的约束 —— 单目标 `net45` 以兼容 Server 2012、仅 x64、不使用高于 Windows 8 的 API。构建与验证步骤见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+
+最有用的一份缺陷报告包含：执行的命令行、`--show-env` 的输出，以及数字明显不对时报告里的 `skip_paths` 部分。
 
 ---
 
