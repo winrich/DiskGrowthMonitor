@@ -54,6 +54,7 @@ First public release. Windows x64, single `net45` target, no prerequisites.
   purpose and cleanability (safe / caution / keep).
 - Bilingual UI (Chinese / English), following the program language or `--lang`.
 - Multi-root reports are split into tabs, one per scan root.
+- A provenance line at the foot of the report links back to the project repository.
 
 ### Console
 
