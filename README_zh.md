@@ -2,7 +2,7 @@
 
 [**English**](README.md) | 简体中文
 
-![Windows 7 SP1+ / 10 / 11](https://img.shields.io/badge/Windows-7%20SP1%2B%20%2F%2010%20%2F%2011-0078D4?style=flat-square) ![.NET Framework 4.5 —— 免安装](https://img.shields.io/badge/.NET%20Framework-4.5%20%C2%B7%20nothing%20to%20install-512BD4?style=flat-square) ![仅 x64](https://img.shields.io/badge/arch-x64%20only-6E7781?style=flat-square) ![不删除任何文件](https://img.shields.io/badge/deletes%20files-never-2DA44E?style=flat-square) ![MIT](https://img.shields.io/badge/license-MIT-2DA44E?style=flat-square)
+![Windows 7 SP1+ / 10 / 11 · .NET Framework 4.5，免安装 · 仅 x64 · 不删除任何文件 · MIT](docs/images/badges.svg)
 
 ### 「C 盘怎么又满了？」
 

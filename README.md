@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README_zh.md)
 
-![Windows 7 SP1+ / 10 / 11](https://img.shields.io/badge/Windows-7%20SP1%2B%20%2F%2010%20%2F%2011-0078D4?style=flat-square) ![.NET Framework 4.5 — nothing to install](https://img.shields.io/badge/.NET%20Framework-4.5%20%C2%B7%20nothing%20to%20install-512BD4?style=flat-square) ![x64 only](https://img.shields.io/badge/arch-x64%20only-6E7781?style=flat-square) ![Deletes nothing](https://img.shields.io/badge/deletes%20files-never-2DA44E?style=flat-square) ![MIT](https://img.shields.io/badge/license-MIT-2DA44E?style=flat-square)
+![Windows 7 SP1+ / 10 / 11 · .NET Framework 4.5, nothing to install · x64 only · deletes nothing · MIT](docs/images/badges.svg)
 
 ### "Why is my C: drive full again?"
 
